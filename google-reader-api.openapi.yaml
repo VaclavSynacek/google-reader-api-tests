@@ -1,0 +1,747 @@
+openapi: 3.0.3
+
+info:
+  title: Google Reader compatible API (FreshRSS)
+  description: |
+    OpenAPI description of the Google Reader-compatible API as implemented by
+    **FreshRSS** in `p/api/greader.php`. There is no official Google spec —
+    Google Reader was shut down in 2013 and never published one. The FreshRSS
+    implementation is the most complete and most actively maintained
+    open-source reference, and is wire-compatible with the same clients that
+    target Inoreader / The Old Reader / BazQux / FeedHQ (the "greader"
+    ecosystem). This document is derived directly from FreshRSS source:
+
+      * `p/api/greader.php`           — request dispatch + handlers
+      * `app/Models/Entry.php`        — `Entry::toGReader()` item schema
+      * `docs/en/developers/06_GoogleReader_API.md`
+
+    Base path conventions:
+      * FreshRSS mounts the API at `{base}/api/greader.php`.
+      * The original Google Reader base was `https://www.google.com/reader`.
+      * In this document `servers` uses a FreshRSS example; adjust to your
+        instance (or to Inoreader / The Old Reader / BazQux, which share the
+        same path structure).
+
+    Authentication: two-step.
+      1. `POST /accounts/ClientLogin` with `Email`/`Passwd` (the *API
+         password*, not the account password in FreshRSS). Returns
+         `Auth=<user>/<token>`.
+      2. Send `Authorization: GoogleLogin auth=<user>/<token>` on every
+         subsequent request. Write operations additionally require a one-time
+         token from `GET /reader/api/0/token`, sent in the `T` form field
+         (some clients send `T=x` or empty; FreshRSS tolerates that).
+
+    Notes on FreshRSS-specific behavior (still greader-compatible):
+      * State streams use both `com.google.*` (standard) and `org.freshrss.*`
+        (FreshRSS extensions: `main`, `important`).
+      * Several list endpoints require `?output=json`; anything else returns
+        HTTP 501 Not Implemented.
+      * Labels and categories are unified: a "label" is a FreshRSS category
+        or a dynamic tag.
+  version: 1.0.0
+  contact:
+    name: FreshRSS
+    url: https://github.com/FreshRSS/FreshRSS
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: https://freshrss.example.net/api/greader.php
+    description: FreshRSS instance (replace with your own)
+
+security:
+  - GoogleLoginAuth: []
+
+tags:
+  - name: Authentication
+  - name: Stream
+  - name: Subscription
+  - name: Tag
+  - name: Item
+  - name: User
+  - name: UnreadCount
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # Authentication
+  # ---------------------------------------------------------------------------
+
+  /accounts/ClientLogin:
+    post:
+      tags: [Authentication]
+      summary: Log in and obtain an Auth token
+      description: |
+        Authenticates the user with their API password. On success returns a
+        plain-text body with `SID`, `LSID` (always `null` in FreshRSS) and
+        `Auth` lines. The value of `Auth` is `<user>/<token>` and is used in
+        the `Authorization: GoogleLogin auth=...` header for all other calls.
+
+        FreshRSS accepts credentials via POST body (recommended) or query
+        string (deprecated — logs the password).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [Email, Passwd]
+              properties:
+                Email: { type: string, description: FreshRSS username }
+                Passwd: { type: string, description: API password (not account password) }
+      responses:
+        '200':
+          description: Success — plain text token response
+          content:
+            text/plain:
+              schema: { $ref: '#/components/schemas/ClientLoginResponse' }
+              example: |
+                SID=alice/8e6845e089457af25303abc6f53356eb60bdb5f8
+                LSID=null
+                Auth=alice/8e6845e089457af25303abc6f53356eb60bdb5f8
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  # ---------------------------------------------------------------------------
+  # Token (required before write ops)
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/token:
+    get:
+      tags: [Authentication]
+      summary: Get a POST token for write operations
+      description: |
+        Returns a plain-text token (57 chars in FreshRSS) that must be sent in
+        the `T` field of mutating requests (`edit-tag`, `rename-tag`,
+        `disable-tag`, `mark-all-as-read`).
+      responses:
+        '200':
+          description: Plain text token (trailing newline)
+          content:
+            text/plain:
+              schema: { type: string }
+              example: 8e6845e089457af25303abc6f53356eb60bdb5f8ZZZZZZZZZZZZZ
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------------------------------------------------------------------
+  # User info
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/user-info:
+    get:
+      tags: [User]
+      summary: Information about the authenticated user
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserInfo' }
+
+  # ---------------------------------------------------------------------------
+  # Tag list
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/tag/list:
+    get:
+      tags: [Tag]
+      summary: List tags / labels / state streams
+      parameters:
+        - name: output
+          in: query
+          required: true
+          description: Only `json` is implemented; anything else → 501.
+          schema: { type: string, enum: [json] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TagList' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+
+  # ---------------------------------------------------------------------------
+  # Subscription
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/subscription/list:
+    get:
+      tags: [Subscription]
+      summary: List the user's subscriptions
+      parameters:
+        - name: output
+          in: query
+          required: true
+          schema: { type: string, enum: [json] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionList' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+
+  /reader/api/0/subscription/edit:
+    post:
+      tags: [Subscription]
+      summary: Subscribe / unsubscribe / rename / move a feed
+      description: |
+        Action is selected by `ac`:
+          * `subscribe` — `s` is the feed URL; optional `t` title, `a` add to label.
+          * `unsubscribe` — `s` is `feed/<id>`.
+          * `edit` — `s` is `feed/<id>`; optional `t` new title; `a`/`r` add/remove label.
+
+        `s` and `t` may be repeated to operate on multiple subscriptions.
+        In FreshRSS a feed belongs to a single category, so only one `a`/`r` applies.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [s, ac]
+              properties:
+                s:  { type: array, items: { type: string }, description: Stream/feed id (or URL for subscribe). Repeatable. }
+                ac: { type: string, enum: [subscribe, unsubscribe, edit] }
+                t:  { type: array, items: { type: string }, description: Title. Repeatable. }
+                a:  { type: string, description: 'StreamId to add to, e.g. user/-/label/Tech' }
+                r:  { type: string, description: 'StreamId to remove from' }
+      responses:
+        '200': { description: 'OK (plain text body)', content: { text/plain: { schema: { type: string, example: OK } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /reader/api/0/subscription/quickadd:
+    post:
+      tags: [Subscription]
+      summary: Quick-add a feed by URL
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [quickadd]
+              properties:
+                quickadd: { type: string, description: Feed URL }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuickAddResponse' }
+
+  /reader/api/0/subscription/export:
+    get:
+      tags: [Subscription]
+      summary: Export subscriptions as OPML
+      responses:
+        '200':
+          description: OPML XML document
+          content:
+            application/xml: { schema: { type: string } }
+
+  /reader/api/0/subscription/import:
+    post:
+      tags: [Subscription]
+      summary: Import an OPML document
+      requestBody:
+        required: true
+        content:
+          text/xml: { schema: { type: string } }
+          application/xml: { schema: { type: string } }
+      responses:
+        '200': { description: OK }
+
+  # ---------------------------------------------------------------------------
+  # Stream contents / item ids
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/stream/contents/{s}:
+    get:
+      tags: [Stream]
+      summary: Get the contents (full items) of a stream
+      description: |
+        `{s}` is a stream id encoded as a path. Common forms:
+          * `user/-/state/com.google/reading-list` — all (non-hidden) items
+          * `user/-/state/com.google/starred`     — favourites
+          * `user/-/state/org.freshrss/main`      — main-priority feeds
+          * `user/-/state/org.freshrss/important` — important feeds
+          * `user/-/label/<LabelName>`            — a category / label
+          * `feed/<feedId>`                       — a single feed
+          * `feed/<url-encoded feed URL>`         — a feed by URL (BazQux compat)
+
+        The query parameter form `?s=...` is also accepted (BazQux / EasyRSS / FeedMe compat).
+        Responses are streamed and may be very large.
+      parameters:
+        - name: s
+          in: path
+          required: true
+          schema: { type: string }
+          description: Stream id (see above).
+        - { $ref: '#/components/parameters/n' }
+        - { $ref: '#/components/parameters/r' }
+        - { $ref: '#/components/parameters/ot' }
+        - { $ref: '#/components/parameters/nt' }
+        - { $ref: '#/components/parameters/xt' }
+        - { $ref: '#/components/parameters/it' }
+        - { $ref: '#/components/parameters/c' }
+        - { $ref: '#/components/parameters/ck' }
+        - { $ref: '#/components/parameters/client' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StreamContents' }
+
+  /reader/api/0/stream/items/ids:
+    get:
+      tags: [Stream]
+      summary: Get item IDs (refs only) for a stream
+      description: |
+        Returns only item references (numeric ids) plus an optional
+        `continuation`. Use `/stream/items/contents` to hydrate them.
+      parameters:
+        - name: s
+          in: query
+          required: true
+          schema: { type: string }
+          description: Stream id.
+        - { $ref: '#/components/parameters/n' }
+        - { $ref: '#/components/parameters/r' }
+        - { $ref: '#/components/parameters/ot' }
+        - { $ref: '#/components/parameters/nt' }
+        - { $ref: '#/components/parameters/xt' }
+        - { $ref: '#/components/parameters/it' }
+        - { $ref: '#/components/parameters/c' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemRefs' }
+
+  /reader/api/0/stream/items/contents:
+    post:
+      tags: [Stream]
+      summary: Get full items by id
+      description: |
+        Hydrate a set of item ids into full item objects. Item ids are sent as
+        repeated `i` fields, either as the long greader form
+        `tag:google.com,2005:reader/item/<hex>` or as bare decimal ids.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                i: { type: array, items: { type: string }, description: Item id, repeatable. }
+                r: { type: string, enum: [d, n, o], description: Sort order. }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StreamContents' }
+
+  # ---------------------------------------------------------------------------
+  # Unread count
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/unread-count:
+    get:
+      tags: [UnreadCount]
+      summary: Unread counts per feed / label / global
+      parameters:
+        - name: output
+          in: query
+          required: true
+          schema: { type: string, enum: [json] }
+        - { $ref: '#/components/parameters/ck' }
+        - name: allcomments
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: comments
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnreadCount' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+
+  # ---------------------------------------------------------------------------
+  # Edit tag (mark read/starred/label)
+  # ---------------------------------------------------------------------------
+
+  /reader/api/0/edit-tag:
+    post:
+      tags: [Item, Tag]
+      summary: Add/remove tags on items (read, starred, labels)
+      description: |
+        `a` and `r` are repeatable tag streams. Recognised special states:
+          * `user/-/state/com.google/read`
+          * `user/-/state/com.google/starred`
+          * `user/-/label/<Name>` — dynamic label/tag
+        `broadcast`, `like`, `tracking-kept-unread` are accepted but no-ops.
+        `i` is repeatable item id. Requires POST token `T`.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                T: { type: string, description: POST token from /token }
+                i: { type: array, items: { type: string }, description: Item id (repeatable) }
+                a: { type: array, items: { type: string }, description: Tag to add (repeatable) }
+                r: { type: array, items: { type: string }, description: Tag to remove (repeatable) }
+      responses:
+        '200': { description: 'OK', content: { text/plain: { schema: { type: string, example: OK } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /reader/api/0/rename-tag:
+    post:
+      tags: [Tag]
+      summary: Rename a label / category / tag
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [s, dest]
+              properties:
+                T:    { type: string }
+                s:    { type: string, description: 'e.g. user/-/label/Old' }
+                dest: { type: string, description: 'e.g. user/-/label/New' }
+      responses:
+        '200': { description: OK, content: { text/plain: { schema: { type: string, example: OK } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /reader/api/0/disable-tag:
+    post:
+      tags: [Tag]
+      summary: Delete a label / category / tag
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                T: { type: string }
+                s: { type: array, items: { type: string }, description: 'user/-/label/<Name> (repeatable)' }
+      responses:
+        '200': { description: OK }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /reader/api/0/mark-all-as-read:
+    post:
+      tags: [Stream]
+      summary: Mark all items in a stream as read
+      description: |
+        `s` is a stream id (`feed/<id>`, `user/-/label/<Name>`, or
+        `user/-/state/com.google/reading-list`).
+        `ts` is an optional cutoff in **nanoseconds** (item timestampUsec);
+        items older than or equal to it are marked read.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [s]
+              properties:
+                T:  { type: string }
+                s:  { type: string }
+                ts: { type: string, description: Cutoff timestamp in nanoseconds (digits only). }
+      responses:
+        '200': { description: OK, content: { text/plain: { schema: { type: string, example: OK } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+# ===========================================================================
+# Components
+# ===========================================================================
+
+components:
+
+  securitySchemes:
+    GoogleLoginAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Value: `GoogleLogin auth=<user>/<token>` where `<user>/<token>` is the
+        `Auth=` value returned by `/accounts/ClientLogin`.
+
+  parameters:
+
+    n:
+      name: n
+      in: query
+      required: false
+      description: Maximum number of results. Defaults to 20.
+      schema: { type: integer, default: 20 }
+
+    r:
+      name: r
+      in: query
+      required: false
+      description: 'Sort order: `d`/`n` = descending date, `o` = ascending.'
+      schema: { type: string, enum: [d, n, o], default: d }
+
+    ot:
+      name: ot
+      in: query
+      required: false
+      description: Start time (Unix seconds). Items crawled after this.
+      schema: { type: integer }
+
+    nt:
+      name: nt
+      in: query
+      required: false
+      description: Stop time (Unix seconds).
+      schema: { type: integer }
+
+    xt:
+      name: xt
+      in: query
+      required: false
+      description: |
+        Exclude target. e.g. `user/-/state/com.google/read` excludes read
+        items; `feed/<id>` excludes a feed.
+      schema: { type: string }
+
+    it:
+      name: it
+      in: query
+      required: false
+      description: Include/filter target. e.g. `user/-/state/com.google/starred`.
+      schema: { type: string }
+
+    c:
+      name: c
+      in: query
+      required: false
+      description: Continuation token (numeric). Returned as `continuation`.
+      schema: { type: string }
+
+    ck:
+      name: ck
+      in: query
+      required: false
+      description: 'Client cache key (current Unix time).'
+      schema: { type: integer }
+
+    client:
+      name: client
+      in: query
+      required: false
+      description: 'Client hint. Special-case: `client=newsplus` returns `[0]` on empty result (News+ bug workaround).'
+      schema: { type: string }
+
+  responses:
+
+    BadRequest:
+      description: Bad request.
+      content: { text/plain: { schema: { type: string } } }
+
+    Unauthorized:
+      description: 'Unauthorized (HTTP 401). FreshRSS returns an HTML/login body.'
+      content: { text/html: { schema: { type: string } } }
+
+    NotImplemented:
+      description: 'Not Implemented (HTTP 501). Returned e.g. when output!=json on list endpoints.'
+      content: { text/plain: { schema: { type: string } } }
+
+  schemas:
+
+    # ---- Auth ---------------------------------------------------------------
+
+    ClientLoginResponse:
+      type: string
+      description: Plain text with SID / LSID / Auth lines.
+      example: |
+        SID=alice/8e6845e089457af25303abc6f53356eb60bdb5f8
+        LSID=null
+        Auth=alice/8e6845e089457af25303abc6f53356eb60bdb5f8
+
+    # ---- User ---------------------------------------------------------------
+
+    UserInfo:
+      type: object
+      properties:
+        userId:         { type: string }
+        userName:       { type: string }
+        userProfileId:  { type: string }
+        userEmail:      { type: string }
+
+    # ---- Tags ---------------------------------------------------------------
+
+    TagList:
+      type: object
+      properties:
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/Tag' }
+
+    Tag:
+      type: object
+      properties:
+        id:    { type: string, example: 'user/-/state/com.google/starred' }
+        sortid:  { type: string }
+        type:    { type: string, description: 'Inoreader extension: `folder` or `tag`.' }
+        unread_count: { type: integer, description: Inoreader extension }
+
+    # ---- Subscriptions ------------------------------------------------------
+
+    SubscriptionList:
+      type: object
+      properties:
+        subscriptions:
+          type: array
+          items: { $ref: '#/components/schemas/Subscription' }
+
+    Subscription:
+      type: object
+      properties:
+        id:         { type: string, example: 'feed/42' }
+        title:      { type: string }
+        url:        { type: string, description: Feed URL }
+        htmlUrl:    { type: string, description: Site URL }
+        iconUrl:    { type: string }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/SubscriptionCategory' }
+        frss:priority:   { type: string, description: 'FreshRSS extension: MAIN_STREAM / IMPORTANT / CATEGORY / FEED' }
+        firstitemmsec: { type: string }
+
+    SubscriptionCategory:
+      type: object
+      properties:
+        id:    { type: string, example: 'user/-/label/Tech' }
+        label: { type: string, example: 'Tech' }
+
+    QuickAddResponse:
+      type: object
+      properties:
+        numResults: { type: integer }
+        query:      { type: string }
+        streamId:   { type: string }
+        streamName: { type: string }
+        error:      { type: string }
+
+    # ---- Streams / items ----------------------------------------------------
+
+    StreamContents:
+      type: object
+      properties:
+        id:           { type: string, example: 'user/-/state/com.google/reading-list' }
+        title:        { type: string }
+        updated:      { type: integer, description: Unix seconds }
+        direction:    { type: string }
+        continuation: { type: string }
+        self:
+          type: array
+          items:
+            type: object
+            properties:
+              href: { type: string }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Item' }
+
+    Item:
+      type: object
+      description: A single entry. Mirrors `Entry::toGReader('compat')`.
+      properties:
+        id:           { type: string, example: 'tag:google.com,2005:reader/item/00b2d0fa1c5b3a47' }
+        crawlTimeMsec:{ type: string, description: Crawl time in milliseconds }
+        timestampUsec:{ type: string, description: Published time in microseconds (EasyRSS/Reeder) }
+        published:    { type: integer, description: Unix seconds }
+        title:        { type: string }
+        author:       { type: string }
+        summary:
+          type: object
+          properties:
+            content: { type: string, description: Truncated (compat mode) HTML }
+        content:
+          type: object
+          properties:
+            content: { type: string, description: Full HTML (non-compat mode) }
+        canonical:
+          type: array
+          items:
+            type: object
+            properties:
+              href: { type: string }
+        alternate:
+          type: array
+          items:
+            type: object
+            properties:
+              href: { type: string }
+              type: { type: string }
+        categories:
+          type: array
+          description: |
+            State + label streams the item belongs to. Always includes
+            `user/-/state/com.google/reading-list`; may include
+            `.../com.google/read`, `.../com.google/starred`,
+            `.../org.freshrss/main`, `.../org.freshrss/important`, and
+            `user/-/label/<Name>` entries.
+          items: { type: string }
+        origin:
+          type: object
+          properties:
+            streamId: { type: string, example: 'feed/42' }
+            title:    { type: string }
+            htmlUrl:  { type: string }
+            feedUrl:  { type: string, description: FreshRSS mode only }
+        enclosure:
+          type: array
+          items:
+            type: object
+            properties:
+              href:   { type: string }
+              type:   { type: string }
+              length: { type: integer }
+
+    ItemRefs:
+      type: object
+      description: Output of `/stream/items/ids`.
+      properties:
+        itemRefs:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, description: Decimal item id }
+        continuation: { type: string }
+
+    # ---- Unread counts ------------------------------------------------------
+
+    UnreadCount:
+      type: object
+      properties:
+        max: { type: integer }
+        unreadcounts:
+          type: array
+          items: { $ref: '#/components/schemas/UnreadCountEntry' }
+
+    UnreadCountEntry:
+      type: object
+      properties:
+        id: { type: string, example: 'feed/42' }
+        count: { type: integer }
+        newestItemTimestampUsec: { type: string }
