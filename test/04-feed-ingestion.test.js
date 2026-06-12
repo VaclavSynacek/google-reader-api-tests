@@ -27,7 +27,7 @@ const { FeedServer } = require('../lib/feed-server');
 const { refreshFeeds } = require('../lib/refresh');
 const {
   config, configuredClient, skipUnlessConfigured,
-  skipIfWritesDisabled, skipIfIngestionDisabled, uniqueLabel,
+  skipIfIngestionDisabled, uniqueLabel,
 } = require('../lib/test-helpers');
 
 let client, cfg;
@@ -75,7 +75,6 @@ after(async () => {
 test('ingestion: new items in the feed appear after refresh', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;
-  if (skipIfWritesDisabled(t)) return;
 
   // 1. Seed the feed BEFORE subscribing so the first fetch has something.
   const first = feedServer.addItem({ title: 'Ingestion Seed ' + uniqueLabel('') });
@@ -132,7 +131,6 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
 test('ingestion: an updated item is reflected in the feed', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;
-  if (skipIfWritesDisabled(t)) return;
 
   const marker = 'ORIGINAL-' + uniqueLabel('');
   const updated = 'CHANGED-' + uniqueLabel('');
