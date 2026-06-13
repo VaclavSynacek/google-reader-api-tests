@@ -4,3 +4,4 @@ docker/*/freshrss-data/
 docker/*/freshrss-extensions/
 docker/*/data/
 docker/*/extensions/
+docker/*/postgres/
