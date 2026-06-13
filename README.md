@@ -89,7 +89,10 @@ All configuration is via environment variables.
 | `GREADER_USER` | — | Username (`Email`). |
 | `GREADER_PASSWORD` | — | API password. |
 | `GREADER_TIMEOUT_MS` | `20000` | Per-request HTTP timeout. |
-| `GREADER_FEED_URL` | `https://example.org/feed/` | Feed used by the subscribe/unsubscribe round-trip in the update tests. |
+
+The write/ingestion tests subscribe the server to the **bundled in-process
+RSS feed server** (no external feed needed). They only need the server under
+test to be able to reach that feed; see the feed-connection vars below.
 
 ### Test selection
 
@@ -105,8 +108,9 @@ Without any skip flag, all four groups run.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GREADER_REFRESH_CMD` | unset | Shell command to force a server refresh. If unset, the OPML-import fallback is used. |
-| `GREADER_FEED_BIND` | `127.0.0.1:0` | Bind spec for the bundled feed server (`0` = ephemeral port). |
-| `GREADER_FEED_PUBLIC_URL` | derived from bind | URL the greader server uses to reach the bundled feed. |
+| `GREADER_FEED_BIND` | `0.0.0.0:0` | Bind spec for the bundled feed server (`0` = ephemeral port; each test file gets its own). |
+| `GREADER_FEED_PUBLIC_HOST` | derived from bind | Host the greader server uses to reach the bundled feed (e.g. `172.17.0.1` when the server runs in Docker and the feed on the host). The port is appended at runtime. |
+| `GREADER_FEED_PUBLIC_URL` | unset | Full URL override; if set it wins verbatim (advanced). |
 | `GREADER_INGESTION_TIMEOUT_MS` | `120000` | How long to poll for items to appear after a refresh. |
 | `GREADER_INGESTION_POLL_MS` | `3000` | Poll interval. |
 
@@ -140,6 +144,37 @@ export GREADER_SKIP_WRITES=1          # skip group 3 (ingestion has its own togg
 npm test
 ```
 
+## Reference-server harnesses
+
+`docker/` contains harnesses that bring up a reference greader server in a
+container and run the whole suite against it. Each implementation gets its
+own subdirectory so the harnesses can serve as templates for new servers:
+
+```
+docker/freshrss/             FreshRSS reference harness (template for new ones)
+  docker-compose.yml         brings up the server container
+  provision-freshrss.sh      creates user + API password, fixes permissions
+  env.sh                     exports GREADER_* to point at the container
+  freshrss-data/             server runtime state (gitignored)
+```
+
+Run the FreshRSS reference suite end-to-end:
+
+```sh
+docker compose -f docker/freshrss/docker-compose.yml up -d
+docker/freshrss/provision-freshrss.sh
+source docker/freshrss/env.sh   # exports GREADER_* to point at the container
+npm test
+```
+
+To add a harness for another server (Tiny Tiny RSS + greader plugin, Miniflux
+greader adapter, …), copy the `docker/freshrss/` layout: a `docker-compose.yml`
+that brings up the server, a `provision-<server>.sh` that creates the user and
+API password and fixes container permissions, and an `env.sh` that exports the
+`GREADER_*` vars (notably `GREADER_FEED_PUBLIC_HOST` so the container can
+reach the host's bundled feed server, and `GREADER_REFRESH_CMD` if the server
+has a proprietary refresh).
+
 ## Layout
 
 ```
@@ -152,4 +187,5 @@ test/01-auth.test.js             authentication
 test/02-read-endpoints.test.js   GET operations
 test/03-write-endpoints.test.js  update operations
 test/04-feed-ingestion.test.js   feed ingestion (server behavior)
+docker/freshrss/                FreshRSS reference harness (template for more servers)
 ```

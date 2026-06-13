@@ -189,7 +189,7 @@ paths:
       summary: Subscribe / unsubscribe / rename / move a feed
       description: |
         Action is selected by `ac`:
-          * `subscribe` — `s` is the feed URL; optional `t` title, `a` add to label.
+          * `subscribe` — `s` is `feed/<url>` (the `feed/` stream-id prefix is mandatory; a bare URL is silently ignored by FreshRSS / the original Google Reader servers); optional `t` title, `a` add to label.
           * `unsubscribe` — `s` is `feed/<id>`.
           * `edit` — `s` is `feed/<id>`; optional `t` new title; `a`/`r` add/remove label.
 
@@ -203,7 +203,7 @@ paths:
               type: object
               required: [s, ac]
               properties:
-                s:  { type: array, items: { type: string }, description: Stream/feed id (or URL for subscribe). Repeatable. }
+                s:  { type: array, items: { type: string }, description: Stream/feed id, always `feed/`-prefixed (`feed/<id>` for unsubscribe/edit, `feed/<url>` for subscribe). Repeatable. }
                 ac: { type: string, enum: [subscribe, unsubscribe, edit] }
                 t:  { type: array, items: { type: string }, description: Title. Repeatable. }
                 a:  { type: string, description: 'StreamId to add to, e.g. user/-/label/Tech' }

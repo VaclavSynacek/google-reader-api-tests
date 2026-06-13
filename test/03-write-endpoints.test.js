@@ -1,17 +1,44 @@
 'use strict';
 
-const { test, before } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { STATE, label } = require('../lib/greader-client');
-const { skipUnlessConfigured, skipIfWritesDisabled, configuredClient, uniqueLabel } = require('../lib/test-helpers');
+const { STATE, label, feed } = require('../lib/greader-client');
+const { FeedServer } = require('../lib/feed-server');
+const { skipUnlessConfigured, skipIfWritesDisabled, configuredClient, uniqueLabel, resolveFeedPublicUrl } = require('../lib/test-helpers');
 
 let client, cfg;
+let feedServer, feedUrl;
 before(async () => {
   if (!process.env.GREADER_BASE_URL) return;
   ({ client, cfg } = configuredClient());
   await client.login();
+  // Start the bundled feed server and use it as the throwaway subscription
+  // target for the subscribe/quickadd round-trips. This makes the write tests
+  // fully self-contained: no external network feed is needed, the only thing
+  // the server under test must reach is this in-process feed.
+  feedServer = new FeedServer();
+  const started = await feedServer.start({ bind: cfg.feedBind });
+  feedUrl = resolveFeedPublicUrl(`127.0.0.1:${started.port}`, cfg);
 });
+
+after(async () => {
+  if (feedServer) await feedServer.stop();
+});
+
+/**
+ * Remove any pre-existing subscription to our feed so a test starts from a
+ * clean slate. Returns true if something was unsubscribed.
+ */
+async function unsubscribeFeedIfPresent() {
+  const { json } = await client.subscriptionList();
+  const existing = json.subscriptions.find((s) => s.url === feedUrl);
+  if (existing) {
+    await client.subscriptionEdit({ ac: 'unsubscribe', s: existing.id });
+    return true;
+  }
+  return false;
+}
 
 /**
  * Find a feed id that has unread items we can safely mutate in tests.
@@ -29,15 +56,23 @@ test('subscribe -> appears in list -> unsubscribe -> gone', { timeout: 60000 }, 
   if (skipUnlessConfigured(t)) return;
   if (skipIfWritesDisabled(t)) return;
 
-  // 1. subscribe
+  // 0. Clean slate: if a previous run (or quickadd) left this feed
+  //    subscribed, unsubscribe it first. FreshRSS returns 400 when you
+  //    `subscribe` to a feed that is already subscribed, so without this the
+  //    test is order-/state-dependent. Real clients must do the same.
+  await unsubscribeFeedIfPresent();
+
+  // 1. subscribe. Per the Google Reader wire format the stream id for a
+  // subscribe is `feed/<url>` (the `feed/` prefix is mandatory on FreshRSS and
+  // the original greader servers; a bare URL is silently ignored).
   const { status: subStatus, text } = await client.subscriptionEdit({
-    ac: 'subscribe', s: cfg.feedUrl,
+    ac: 'subscribe', s: feed(feedUrl),
   });
   assert.equal(subStatus, 200, 'subscribe must return HTTP 200');
 
   // 2. it must appear in subscription/list
   const { json: after } = await client.subscriptionList();
-  const found = after.subscriptions.find((s) => s.url === cfg.feedUrl);
+  const found = after.subscriptions.find((s) => s.url === feedUrl);
   assert.ok(found, 'newly subscribed feed must appear in subscription/list');
   const feedId = found.id; // feed/<id>
 
@@ -50,7 +85,7 @@ test('subscribe -> appears in list -> unsubscribe -> gone', { timeout: 60000 }, 
   // 4. it must be gone
   const { json: final } = await client.subscriptionList();
   assert.ok(
-    !final.subscriptions.find((s) => s.url === cfg.feedUrl),
+    !final.subscriptions.find((s) => s.url === feedUrl),
     'unsubscribed feed must not appear in subscription/list',
   );
 });
@@ -59,7 +94,10 @@ test('quickadd subscribes by URL and returns numResults', { timeout: 60000 }, as
   if (skipUnlessConfigured(t)) return;
   if (skipIfWritesDisabled(t)) return;
 
-  const { status, json } = await client.quickAdd(cfg.feedUrl);
+  // Clean slate (FreshRSS 400s on re-subscribe of an existing feed).
+  await unsubscribeFeedIfPresent();
+
+  const { status, json } = await client.quickAdd(feedUrl);
   assert.equal(status, 200);
   assert.ok(json, 'quickadd must return JSON');
   // Successful add reports numResults=1; servers may report 0 if already subscribed.
@@ -67,7 +105,7 @@ test('quickadd subscribes by URL and returns numResults', { timeout: 60000 }, as
 
   // Clean up if it was added.
   const { json: list } = await client.subscriptionList();
-  const found = list.subscriptions.find((s) => s.url === cfg.feedUrl);
+  const found = list.subscriptions.find((s) => s.url === feedUrl);
   if (found) {
     await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id });
   }

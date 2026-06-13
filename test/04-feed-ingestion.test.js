@@ -27,7 +27,7 @@ const { FeedServer } = require('../lib/feed-server');
 const { refreshFeeds } = require('../lib/refresh');
 const {
   config, configuredClient, skipUnlessConfigured,
-  skipIfIngestionDisabled, uniqueLabel,
+  skipIfIngestionDisabled, uniqueLabel, resolveFeedPublicUrl,
 } = require('../lib/test-helpers');
 
 let client, cfg;
@@ -59,11 +59,8 @@ before(async () => {
   ({ client, cfg } = configuredClient());
   await client.login();
   feedServer = new FeedServer();
-  const started = await feedServer.start({
-    bind: cfg.feedBind,
-    publicUrl: cfg.feedPublicUrl,
-  });
-  feedUrl = started.publicUrl;
+  const started = await feedServer.start({ bind: cfg.feedBind });
+  feedUrl = resolveFeedPublicUrl(`127.0.0.1:${started.port}`, cfg);
 });
 
 after(async () => {
@@ -81,9 +78,10 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
   feedServer.addItem({ title: 'Ingestion Seed 2' });
   t.diagnostic('feed URL: ' + feedUrl);
 
-  // 2. Subscribe the server to our feed.
+  // 2. Subscribe the server to our feed. `s` must be `feed/<url>` per the
+  // Google Reader wire format (a bare URL is silently ignored by FreshRSS).
   const token = await client.postToken();
-  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feedUrl });
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl) });
   assert.equal(sub, 200, 'subscribe must succeed');
 
   // Best-effort cleanup no matter how the test ends.
@@ -137,7 +135,7 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
   const item = feedServer.addItem({ title: marker, description: '<p>orig</p>' });
   t.diagnostic('feed URL: ' + feedUrl);
 
-  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feedUrl });
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl) });
   assert.equal(sub, 200);
   t.after(async () => {
     try {
