@@ -1,0 +1,6 @@
+# FreshRSS runtime state for the Docker-based test harness.
+# Each server harness owns its own data dir under docker/<server>/.
+docker/*/freshrss-data/
+docker/*/freshrss-extensions/
+docker/*/data/
+docker/*/extensions/

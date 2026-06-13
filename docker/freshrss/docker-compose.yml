@@ -1,0 +1,26 @@
+# FreshRSS reference server for the Google Reader API contract tests.
+#
+# Brings up a single-user FreshRSS reachable at:
+#   http://localhost:8080/               UI
+#   http://localhost:8080/api/greader.php  greader API (what the tests hit)
+#
+# Default user: alice  /  password: "alicepass"  /  API password: "aliceapi"
+# These match env.sh next to this file.
+#
+# FreshRSS itself can reach the host (where the bundled feed server runs) via
+# the Docker bridge gateway 172.17.0.1 — see GREADER_FEED_PUBLIC_HOST in env.sh.
+
+services:
+  freshrss:
+    image: freshrss/freshrss:latest
+    container_name: freshrss-greader-tests
+    ports:
+      - "127.0.0.1:8080:80"
+    environment:
+      # FreshRSS needs these to auto-provision on first boot.
+      CRON_MIN: '3,33'           # default cron, runs actualize every 30 min
+      TZ: UTC
+    volumes:
+      - ./freshrss-data:/var/www/FreshRSS/data
+      - ./freshrss-extensions:/var/www/FreshRSS/extensions
+    restart: unless-stopped
