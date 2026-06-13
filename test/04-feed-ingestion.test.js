@@ -33,13 +33,25 @@ const {
 let client, cfg;
 let feedServer, feedUrl;
 
-async function feedItemCount(feedStreamId) {
-  const { status, json, text } = await client.streamContents(feedStreamId, { n: 100 });
-  if (!json || !Array.isArray(json.items)) {
-    process.stderr.write(`[feedItemCount] status=${status} no items; body=${text.slice(0,120)}\n`);
-    return 0;
+async function feedItemRefs(feedStreamId) {
+  const { status, json, text } = await client.streamItemIds(feedStreamId, { n: 100 });
+  if (!json || !Array.isArray(json.itemRefs)) {
+    process.stderr.write(`[feedItemRefs] status=${status} no itemRefs; body=${text.slice(0,120)}\n`);
+    return [];
   }
-  return json.items.length;
+  return json.itemRefs;
+}
+
+async function feedItemCount(feedStreamId) {
+  return (await feedItemRefs(feedStreamId)).length;
+}
+
+async function feedItems(feedStreamId) {
+  const refs = await feedItemRefs(feedStreamId);
+  if (refs.length === 0) return [];
+  const token = await client.postToken();
+  const { json } = await client.streamItemsContents(refs.map((r) => r.id), 'd', token);
+  return json && Array.isArray(json.items) ? json.items : [];
 }
 
 /**
@@ -90,7 +102,7 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
   // 2. Subscribe the server to our feed. `s` must be `feed/<url>` per the
   // Google Reader wire format (a bare URL is silently ignored by FreshRSS).
   const token = await client.postToken();
-  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl) });
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token });
   assert.equal(sub, 200, 'subscribe must succeed');
 
   // Best-effort cleanup no matter how the test ends.
@@ -98,7 +110,7 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
     try {
       const { json } = await client.subscriptionList();
       const found = json.subscriptions.find((s) => s.url === feedUrl);
-      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id });
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
     } catch { /* ignore */ }
     feedServer.reset();
   });
@@ -147,13 +159,14 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
   const item = feedServer.addItem({ title: marker, description: '<p>orig</p>' });
   t.diagnostic('feed URL: ' + feedUrl);
 
-  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl) });
+  const token = await client.postToken();
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token });
   assert.equal(sub, 200);
   t.after(async () => {
     try {
       const { json } = await client.subscriptionList();
       const found = json.subscriptions.find((s) => s.url === feedUrl);
-      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id });
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
     } catch { /* ignore */ }
     feedServer.reset();
   });
@@ -180,8 +193,8 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
 
   // Poll until the changed title is visible in stream/contents.
   const reflected = await poll('updated title appears', async () => {
-    const { json } = await client.streamContents(feedStreamId, { n: 50 });
-    return json && json.items && json.items.some((it) => it.title && it.title.includes(updated));
+    const items = await feedItems(feedStreamId);
+    return items.some((it) => it.title && it.title.includes(updated));
   }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
 
   assert.ok(

@@ -1,0 +1,43 @@
+# Miniflux reference server for the Google Reader API contract tests.
+#
+# Brings up a single-user Miniflux reachable at:
+#   http://localhost:8081/               UI
+#   http://localhost:8081/v1/             REST API
+#   Google Reader API support is enabled in the app settings after boot.
+#
+# Default user: alice  /  password: "alicepass"  /  Google Reader credentials:
+#   alice / alicegr
+# These match env.sh next to this file.
+
+services:
+  miniflux:
+    image: miniflux/miniflux:latest
+    container_name: miniflux-greader-tests
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      DATABASE_URL: postgres://miniflux:secret@db/miniflux?sslmode=disable
+      RUN_MIGRATIONS: '1'
+      CREATE_ADMIN: '1'
+      ADMIN_USERNAME: alice
+      ADMIN_PASSWORD: alicepass
+      FETCHER_ALLOW_PRIVATE_NETWORKS: '1'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:18
+    container_name: miniflux-greader-tests-db
+    environment:
+      POSTGRES_USER: miniflux
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: miniflux
+    volumes:
+      - ./postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "miniflux"]
+      interval: 10s
+      start_period: 20s
+    restart: unless-stopped
