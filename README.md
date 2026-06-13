@@ -113,6 +113,7 @@ Without any skip flag, all four groups run.
 | `GREADER_FEED_PUBLIC_URL` | unset | Full URL override; if set it wins verbatim (advanced). |
 | `GREADER_INGESTION_TIMEOUT_MS` | `120000` | How long to poll for items to appear after a refresh. |
 | `GREADER_INGESTION_POLL_MS` | `3000` | Poll interval. |
+| `GREADER_INGESTION_REFRESH_DELAY_MS` | `1000` | Delay before the second refresh in the ingestion tests; helps servers with slow/proprietary refresh mutexes. |
 
 ## Examples
 

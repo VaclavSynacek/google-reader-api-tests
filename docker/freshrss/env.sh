@@ -22,6 +22,7 @@ export GREADER_FEED_PUBLIC_HOST='172.17.0.1'
 # built-in OPML-import fallback works. But an explicit refresh is faster and
 # more deterministic — use the container's actualize script.
 export GREADER_REFRESH_CMD='docker exec freshrss-greader-tests sh -c "/var/www/FreshRSS/app/actualize_script.php > /tmp/actualize.log 2>&1 || php /var/www/FreshRSS/app/actualize_script.php"'
+export GREADER_INGESTION_REFRESH_DELAY_MS='1000'
 
 # GREADER_FEED_URL is no longer used by the write tests (they subscribe to the
 # bundled in-process feed server). Kept only for backward compatibility.

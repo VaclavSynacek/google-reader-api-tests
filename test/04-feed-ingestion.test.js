@@ -34,8 +34,11 @@ let client, cfg;
 let feedServer, feedUrl;
 
 async function feedItemCount(feedStreamId) {
-  const { json } = await client.streamContents(feedStreamId, { n: 100 });
-  if (!json || !Array.isArray(json.items)) return 0;
+  const { status, json, text } = await client.streamContents(feedStreamId, { n: 100 });
+  if (!json || !Array.isArray(json.items)) {
+    process.stderr.write(`[feedItemCount] status=${status} no items; body=${text.slice(0,120)}\n`);
+    return 0;
+  }
   return json.items.length;
 }
 
@@ -59,6 +62,12 @@ before(async () => {
   ({ client, cfg } = configuredClient());
   await client.login();
   feedServer = new FeedServer();
+  // instrument to see whether the server re-fetches on each refresh
+  const _origHandle = feedServer._handle.bind(feedServer);
+  feedServer._handle = function (req, res, mp) {
+    process.stderr.write(`[FEED-HIT] ${new Date().toISOString()} ${req.method} ${req.url}\n`);
+    return _origHandle(req, res, mp);
+  };
   const started = await feedServer.start({ bind: cfg.feedBind });
   feedUrl = resolveFeedPublicUrl(`127.0.0.1:${started.port}`, cfg);
 });
@@ -115,6 +124,9 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
 
   // 5. Add a NEW item and refresh again; it must appear.
   feedServer.addItem({ title: 'Late item ' + uniqueLabel('') });
+  if (cfg.ingestionRefreshDelayMs > 0) {
+    await new Promise((r) => setTimeout(r, cfg.ingestionRefreshDelayMs));
+  }
   const r2 = await refreshFeeds(client, cfg);
   t.diagnostic('refresh2: ' + r2.method + ' ok=' + r2.ok);
 
@@ -160,6 +172,9 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
 
   // mutate the item in place (same guid) and refresh
   feedServer.updateItem(item.guid, { title: updated });
+  if (cfg.ingestionRefreshDelayMs > 0) {
+    await new Promise((r) => setTimeout(r, cfg.ingestionRefreshDelayMs));
+  }
   const r2 = await refreshFeeds(client, cfg);
   t.diagnostic('refresh2: ' + r2.method + ' ok=' + r2.ok);
 
