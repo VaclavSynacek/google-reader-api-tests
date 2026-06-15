@@ -37,6 +37,20 @@ test('ClientLogin returns Auth token for valid credentials', { timeout: 30000 },
   t.diagnostic('Auth user/token = ' + parsed.Auth);
 });
 
+test('ClientLogin accepts credentials in query string', { timeout: 30000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  const { client, cfg } = configuredClient();
+
+  const { status, text } = await client._fetch('/accounts/ClientLogin', {
+    method: 'POST',
+    query: { Email: cfg.user, Passwd: cfg.password },
+  });
+  assert.equal(status, 200, 'query-string ClientLogin must return HTTP 200');
+  const parsed = parseLoginBody(text);
+  assert.ok(parsed.Auth, 'Auth= line must be present');
+  assert.ok(parsed.Auth.includes('/'), 'Auth value must be "<user>/<token>"');
+});
+
 test('ClientLogin rejects bad credentials with 401', { timeout: 30000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const cfg = require('../lib/test-helpers').config();
