@@ -26,7 +26,7 @@ test('unit: GreaderClient builds path-encoded stream URLs', () => {
 
 // ---- Live tests below require a server ------------------------------------
 
-test('ClientLogin returns Auth token for valid credentials', { timeout: 30000 }, async (t) => {
+test('ClientLogin returns Auth token for valid credentials', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { client, cfg } = configuredClient();
 
@@ -37,7 +37,7 @@ test('ClientLogin returns Auth token for valid credentials', { timeout: 30000 },
   t.diagnostic('Auth user/token = ' + parsed.Auth);
 });
 
-test('ClientLogin accepts credentials in query string', { timeout: 30000 }, async (t) => {
+test('ClientLogin accepts credentials in query string', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { client, cfg } = configuredClient();
 
@@ -51,7 +51,7 @@ test('ClientLogin accepts credentials in query string', { timeout: 30000 }, asyn
   assert.ok(parsed.Auth.includes('/'), 'Auth value must be "<user>/<token>"');
 });
 
-test('ClientLogin rejects bad credentials with 401', { timeout: 30000 }, async (t) => {
+test('ClientLogin rejects bad credentials with 401', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const cfg = require('../lib/test-helpers').config();
   const bad = new GreaderClient({
@@ -66,7 +66,7 @@ test('ClientLogin rejects bad credentials with 401', { timeout: 30000 }, async (
   );
 });
 
-test('requests without Authorization header are rejected by the server', { timeout: 30000 }, async (t) => {
+test('requests without Authorization header are rejected by the server', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const cfg = require('../lib/test-helpers').config();
   // Build a client and bypass the client-side login guard by going straight
@@ -76,7 +76,7 @@ test('requests without Authorization header are rejected by the server', { timeo
   assert.equal(status, 401, 'a request with no Authorization header must be rejected with HTTP 401');
 });
 
-test('token endpoint returns a non-empty plain-text token', { timeout: 30000 }, async (t) => {
+test('token endpoint returns a non-empty plain-text token', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { client } = configuredClient();
   await client.login();

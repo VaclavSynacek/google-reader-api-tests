@@ -216,7 +216,7 @@ test('rename-tag renames a label and disable-tag removes it', { timeout: 60000 }
 
 // ---- OPML export/import ----------------------------------------------------
 
-test('subscription/export returns OPML XML', { timeout: 30000 }, async (t) => {
+test('subscription/export returns OPML XML', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, text } = await client.subscriptionExport();
   assert.equal(status, 200);

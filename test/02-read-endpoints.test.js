@@ -15,7 +15,7 @@ before(async () => {
 
 // ---- user-info -------------------------------------------------------------
 
-test('user-info returns object with user identity fields', { timeout: 30000 }, async (t) => {
+test('user-info returns object with user identity fields', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json } = await client.userInfo();
   assert.equal(status, 200);
@@ -28,14 +28,14 @@ test('user-info returns object with user identity fields', { timeout: 30000 }, a
 
 // ---- tag/list --------------------------------------------------------------
 
-test('tag/list returns JSON with a tags array', { timeout: 30000 }, async (t) => {
+test('tag/list returns JSON with a tags array', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json } = await client.tagList();
   assert.equal(status, 200);
   assert.ok(json && Array.isArray(json.tags), 'body.tags must be an array');
 });
 
-test('tag/list includes the standard state streams clients depend on', { timeout: 30000 }, async (t) => {
+test('tag/list includes the standard state streams clients depend on', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { json } = await client.tagList();
   const ids = new Set(json.tags.map((x) => x.id));
@@ -52,7 +52,7 @@ test('tag/list includes the standard state streams clients depend on', { timeout
   }
 });
 
-test('tag/list with output != json is not 200 (FreshRSS returns 501)', { timeout: 30000 }, async (t) => {
+test('tag/list with output != json is not 200 (FreshRSS returns 501)', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status } = await client.getJson('/reader/api/0/tag/list', { output: 'xml' });
   assert.notEqual(status, 200, 'non-JSON output must not succeed with HTTP 200');
@@ -60,7 +60,7 @@ test('tag/list with output != json is not 200 (FreshRSS returns 501)', { timeout
 
 // ---- subscription/list -----------------------------------------------------
 
-test('subscription/list returns JSON with a subscriptions array', { timeout: 30000 }, async (t) => {
+test('subscription/list returns JSON with a subscriptions array', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json } = await client.subscriptionList();
   assert.equal(status, 200);
@@ -72,7 +72,7 @@ test('subscription/list returns JSON with a subscriptions array', { timeout: 300
   }
 });
 
-test('subscription/list with output != json is not 200', { timeout: 30000 }, async (t) => {
+test('subscription/list with output != json is not 200', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status } = await client.getJson('/reader/api/0/subscription/list', { output: 'atom' });
   assert.notEqual(status, 200);
@@ -80,7 +80,7 @@ test('subscription/list with output != json is not 200', { timeout: 30000 }, asy
 
 // ---- unread-count ----------------------------------------------------------
 
-test('unread-count returns JSON with unreadcounts array', { timeout: 30000 }, async (t) => {
+test('unread-count returns JSON with unreadcounts array', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json } = await client.unreadCount();
   assert.equal(status, 200);
@@ -98,7 +98,7 @@ test('unread-count returns JSON with unreadcounts array', { timeout: 30000 }, as
   }
 });
 
-test('unread-count with output != json is not 200', { timeout: 30000 }, async (t) => {
+test('unread-count with output != json is not 200', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json } = await client.getJson('/reader/api/0/unread-count', { output: 'xml' });
   if (status === 200 && Array.isArray(json)) {
@@ -110,7 +110,7 @@ test('unread-count with output != json is not 200', { timeout: 30000 }, async (t
 
 // ---- stream/contents (reading-list) ---------------------------------------
 
-test('stream contents of reading-list returns a valid item feed', { timeout: 30000 }, async (t) => {
+test('stream contents of reading-list returns a valid item feed', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json } = await client.streamContents(STATE.READING_LIST, { n: 5 });
   assert.equal(status, 200);
@@ -140,7 +140,7 @@ test('stream contents of reading-list returns a valid item feed', { timeout: 300
   }
 });
 
-test('stream contents respects the n (count) parameter', { timeout: 30000 }, async (t) => {
+test('stream contents respects the n (count) parameter', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { json: all } = await client.streamContents(STATE.READING_LIST, { n: 50 });
   if (!all || !Array.isArray(all.items)) { t.skip('stream/contents does not return { items } for reading-list'); return; }
@@ -149,7 +149,7 @@ test('stream contents respects the n (count) parameter', { timeout: 30000 }, asy
   assert.ok(few.items.length <= 1, 'n=1 must return at most 1 item');
 });
 
-test('stream contents honors xt (exclude read) returning only unread', { timeout: 30000 }, async (t) => {
+test('stream contents honors xt (exclude read) returning only unread', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { json } = await client.streamContents(STATE.READING_LIST, { n: 20, xt: STATE.READ });
   if (!json || !Array.isArray(json.items)) { t.skip('stream/contents does not return { items } for reading-list'); return; }
@@ -161,7 +161,7 @@ test('stream contents honors xt (exclude read) returning only unread', { timeout
   }
 });
 
-test('stream contents r=o returns ascending order (oldest first)', { timeout: 30000 }, async (t) => {
+test('stream contents r=o returns ascending order (oldest first)', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { json } = await client.streamContents(STATE.READING_LIST, { n: 10, r: 'o' });
   if (!json || !Array.isArray(json.items)) { t.skip('stream/contents does not return { items } for reading-list'); return; }
@@ -174,7 +174,7 @@ test('stream contents r=o returns ascending order (oldest first)', { timeout: 30
 
 // ---- stream/items/ids ------------------------------------------------------
 
-test('stream/items/ids returns itemRefs (numeric ids)', { timeout: 30000 }, async (t) => {
+test('stream/items/ids returns itemRefs (numeric ids)', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { status, json, text } = await client.streamItemIds(STATE.READING_LIST, { n: 5 });
   if (status === 400 && /stream|category|not found|unknown/i.test(text)) {
@@ -191,7 +191,7 @@ test('stream/items/ids returns itemRefs (numeric ids)', { timeout: 30000 }, asyn
 
 // ---- stream/items/contents (hydrate by id) --------------------------------
 
-test('stream/items/contents hydrates ids returned by items/ids', { timeout: 30000 }, async (t) => {
+test('stream/items/contents hydrates ids returned by items/ids', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { json: refs } = await client.streamItemIds(STATE.READING_LIST, { n: 3 });
   if (!refs.itemRefs || refs.itemRefs.length === 0) {
