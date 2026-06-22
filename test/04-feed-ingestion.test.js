@@ -22,7 +22,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { STATE, feed } = require('../lib/greader-client');
+const { STATE, feed, label } = require('../lib/greader-client');
 const { FeedServer } = require('../lib/feed-server');
 const { refreshFeeds } = require('../lib/refresh');
 const {
@@ -201,6 +201,96 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
     reflected,
     `item title was not updated to "${updated}" within ${cfg.ingestionTimeoutMs}ms. ` +
     'Note: some servers cache article bodies by guid and ignore title updates; this is a known compatibility divergence.',
+  );
+});
+
+test('unsubscribe deletes the feed\'s items from every stream', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  // 1. Seed the feed with multiple items and subscribe.
+  const labelName = uniqueLabel('CleanupLabel');
+  feedServer.addItem({ title: 'Cleanup Seed A ' + uniqueLabel('') });
+  const starItem = feedServer.addItem({ title: 'Cleanup Seed B ' + uniqueLabel('') });
+  feedServer.addItem({ title: 'Cleanup Seed C ' + uniqueLabel('') });
+  t.diagnostic('feed URL: ' + feedUrl);
+
+  const token = await client.postToken();
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token });
+  assert.equal(sub, 200, 'subscribe must succeed');
+
+  const r = await refreshFeeds(client, cfg);
+  t.diagnostic('refresh: ' + r.method + ' ok=' + r.ok + ' :: ' + r.detail);
+  if (!r.ok) { t.skip('refresh mechanism unavailable'); return; }
+
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  if (!feedStreamId) { t.skip('subscribed feed not found in subscription/list'); return; }
+
+  // Wait for ingestion of at least 3 items.
+  const ingested = await poll(
+    'initial items appear',
+    async () => (await feedItemCount(feedStreamId)) >= 3,
+    { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs },
+  );
+  assert.ok(ingested, `server did not ingest the initial 3 items within ${cfg.ingestionTimeoutMs}ms`);
+
+  // 2. Capture the item ids, then star one and label another. These mutations
+  //    add the items to additional streams (STARRED, LABEL#...) which must
+  //    also be cleaned up on unsubscribe.
+  const refs = await feedItemRefs(feedStreamId);
+  assert.ok(refs.length >= 3, 'expected at least 3 ingested items');
+  const ids = refs.map((r) => r.id);
+  const starItemId = ids[0];
+  const labelItemId = ids[1];
+
+  const { status: starStatus } = await client.editTag({ i: [starItemId], a: [STATE.STARRED], T: token });
+  assert.equal(starStatus, 200, 'edit-tag star must succeed');
+  const { status: labelStatus } = await client.editTag({ i: [labelItemId], a: [label(labelName)], T: token });
+  assert.equal(labelStatus, 200, 'edit-tag label must succeed');
+
+  // 3. Snapshot presence in every stream BEFORE unsubscribe. Skip the rest if
+  //    the server doesn't actually expose starred/label streams (some don't).
+  const beforeAll = (await feedItemRefs(STATE.READING_LIST)).map((r) => r.id);
+  const beforeStarred = (await feedItemRefs(STATE.STARRED)).map((r) => r.id);
+  const beforeLabel = (await feedItemRefs(label(labelName))).map((r) => r.id);
+  const starExistedBefore = beforeStarred.includes(starItemId);
+  const labelExistedBefore = beforeLabel.includes(labelItemId);
+  if (!starExistedBefore || !labelExistedBefore) {
+    t.skip('server did not expose starred/label stream items; cannot verify cross-stream cleanup');
+    return;
+  }
+  assert.ok(beforeAll.includes(starItemId), 'item must be in reading-list before unsubscribe');
+
+  // 4. Unsubscribe. Best-effort cleanup happens in t.after regardless.
+  const { status: unsub } = await client.subscriptionEdit({ ac: 'unsubscribe', s: feedStreamId, T: token });
+  assert.equal(unsub, 200, 'unsubscribe must return 200');
+
+  // 5. Poll until the items disappear from every stream (or timeout).
+  const cleanupOk = await poll(
+    'items removed from all streams',
+    async () => {
+      const feedLeft = await feedItemCount(feedStreamId);
+      if (feedLeft > 0) return false;
+      const allIds = new Set((await feedItemRefs(STATE.READING_LIST)).map((r) => r.id));
+      if (ids.some((id) => allIds.has(id))) return false;
+      const starredIds = new Set((await feedItemRefs(STATE.STARRED)).map((r) => r.id));
+      if (ids.some((id) => starredIds.has(id))) return false;
+      const labelIds = new Set((await feedItemRefs(label(labelName))).map((r) => r.id));
+      if (ids.some((id) => labelIds.has(id))) return false;
+      return true;
+    },
+    { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs },
+  );
+
+  // 6. Subscription itself must also be gone.
+  const { json: subsAfter } = await client.subscriptionList();
+  const stillSubscribed = (subsAfter.subscriptions || []).some((s) => s.id === feedStreamId || s.url === feedUrl);
+  assert.equal(stillSubscribed, false, 'subscription must be removed from subscription/list');
+
+  assert.ok(
+    cleanupOk,
+    `unsubscribed feed\'s items were not removed from every stream within ${cfg.ingestionTimeoutMs}ms. ` +
+    'A clean unsubscribe must delete items from the feed stream, the global reading-list, starred, and any label.',
   );
 });
 
