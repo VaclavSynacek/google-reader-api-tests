@@ -13,6 +13,7 @@
 services:
   freshrss:
     image: freshrss/freshrss:latest
+    pull_policy: always
     container_name: freshrss-greader-tests
     ports:
       - "127.0.0.1:8080:80"

@@ -167,6 +167,10 @@ docker/miniflux/             Miniflux compatibility harness
   docker-compose.yml         brings up Miniflux and PostgreSQL
   provision-miniflux.sh      enables Google Reader credentials
   env.sh                     exports GREADER_* and the refresh command
+docker/lessrss/              lessRss compatibility harness
+  Dockerfile                 builds the latest lessRss master
+  docker-compose.yml         brings up its local filesystem-backed server
+  env.sh                     exports GREADER_* and uses OPML refresh
 ```
 
 Run the FreshRSS reference suite end-to-end:
@@ -179,10 +183,22 @@ npm test
 ```
 
 Run Miniflux similarly, substituting `docker/miniflux` and
-`provision-miniflux.sh` in those commands.
+`provision-miniflux.sh` in those commands. The lessRss harness needs no
+provisioning step:
 
-Both checked-in harnesses set `GREADER_REFRESH_CMD` for faster, deterministic
-refreshes. The OPML-import fallback remains available for compatible servers.
+```sh
+docker compose -f docker/lessrss/docker-compose.yml up -d
+source docker/lessrss/env.sh
+npm test
+```
+
+FreshRSS and Miniflux set `GREADER_REFRESH_CMD` for faster, deterministic
+refreshes. lessRss uses the OPML-import fallback so crawling and filesystem
+storage remain in the API server process.
+
+The harnesses deliberately pull current `latest` images, and the lessRss image
+is rebuilt without cache from current `master`. This favors testing current
+compatibility over reproducible historical runs.
 
 To add a harness for another server (Tiny Tiny RSS + greader plugin, …), copy
 the `docker/freshrss/` layout: a `docker-compose.yml` that brings up the server,
@@ -204,4 +220,5 @@ test/03-write-endpoints.test.js  update operations
 test/04-feed-ingestion.test.js   feed ingestion (server behavior)
 docker/freshrss/                FreshRSS reference harness
 docker/miniflux/                Miniflux compatibility harness
+docker/lessrss/                 lessRss compatibility harness
 ```

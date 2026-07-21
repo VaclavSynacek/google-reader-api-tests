@@ -1,0 +1,12 @@
+# Latest lessRss master, built as a disposable local-server test instance.
+services:
+  lessrss:
+    build:
+      context: .
+      pull: true
+      no_cache: true
+    pull_policy: build
+    container_name: lessrss-greader-tests
+    ports:
+      - "127.0.0.1:8082:3000"
+    restart: unless-stopped
