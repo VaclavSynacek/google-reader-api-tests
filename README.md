@@ -41,15 +41,19 @@ There are four independent groups, in separate files:
 | File | Group | What it verifies |
 |------|-------|------------------|
 | `test/01-auth.test.js` | Authentication | `ClientLogin` flow, POST token, auth rejection. Includes unit tests. |
-| `test/02-read-endpoints.test.js` | GET operations | Every read endpoint + JSON-shape checks, `output=json` enforcement, ordering, pagination. |
+| `test/02-read-endpoints.test.js` | Read operations | Non-mutating endpoint and JSON-shape checks that do not require fixture data. |
 | `test/03-write-endpoints.test.js` | Update operations | Mutating endpoints and round-trip flows: subscriptions and custom titles, edit-tag read/star cycles, rename/disable-tag, OPML import/export and title preservation, mark-all-as-read. |
 | `test/04-feed-ingestion.test.js` | Feed ingestion | **Server behavior, not protocol contract.** Verifies fetching, article updates, feed metadata, title overrides, and unsubscribe cleanup. |
 
 The first three exercise the protocol contract and client-visible compatibility.
+Groups 1 and 2 are non-mutating. Group 3 changes subscriptions and item state.
+The fourth is both a server-behavior and controlled-data test: because the
+greader API has no refresh endpoint, it creates temporary subscriptions and
+articles to exercise out-of-band fetching. Read semantics that need known prior
+data—count limits, ordering, and item hydration—also live in group 4.
+
 Not every divergence necessarily breaks every client; known implementation
-shape differences are skipped or documented where practical. The fourth is a
-server-behavior test: the greader API has no refresh endpoint, so it exercises
-the server's out-of-band feed fetching.
+shape differences are skipped or documented where practical.
 
 ### Feed ingestion tests
 
@@ -107,7 +111,12 @@ test to be able to reach that feed; see the feed-connection vars below.
 | `GREADER_SKIP_WRITES` | unset | Skip the update-operation tests (group 3) that mutate server state. |
 | `GREADER_SKIP_INGESTION` | unset | Skip only the feed-ingestion tests (group 4). |
 
-Without any skip flag, all four groups run.
+Without any skip flag, all four groups run and the configured account is
+modified. The two flags are independent: skipping writes does not skip
+ingestion, and skipping ingestion does not skip the write-endpoint tests.
+
+To run against a personal or production account without intentional mutations,
+set **both** skip flags. Groups 1 and 2 are then the only live tests executed.
 
 ### Feed ingestion
 
@@ -123,14 +132,15 @@ Without any skip flag, all four groups run.
 
 ## Examples
 
-Run only the read-only contract tests:
+Run only the non-mutating authentication and read tests (the appropriate mode
+for a personal or production instance):
 
 ```sh
-GREADER_SKIP_WRITES=1 npm test
+GREADER_SKIP_WRITES=1 GREADER_SKIP_INGESTION=1 npm test
 ```
 
-Run everything including ingestion against a local server that refreshes feeds
-as a side effect of OPML import:
+Run everything, including state-changing and ingestion tests, against a
+throwaway local server that refreshes feeds as a side effect of OPML import:
 
 ```sh
 export GREADER_BASE_URL=https://localhost/api/greader.php
