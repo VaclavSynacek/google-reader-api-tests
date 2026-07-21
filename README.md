@@ -36,19 +36,20 @@ npm test
 
 ## Test groups
 
-There are three independent groups, in separate files:
+There are four independent groups, in separate files:
 
 | File | Group | What it verifies |
 |------|-------|------------------|
 | `test/01-auth.test.js` | Authentication | `ClientLogin` flow, POST token, auth rejection. Includes unit tests. |
 | `test/02-read-endpoints.test.js` | GET operations | Every read endpoint + JSON-shape checks, `output=json` enforcement, ordering, pagination. |
-| `test/03-write-endpoints.test.js` | Update operations | Every mutating endpoint + round-trip flows (subscribe/unsubscribe, edit-tag read/star cycles, rename/disable-tag, OPML import/export, mark-all-as-read). |
-| `test/04-feed-ingestion.test.js` | Feed ingestion | **Server behavior, not protocol contract.** Verifies the server actually fetches RSS sources and reflects new/changed items. |
+| `test/03-write-endpoints.test.js` | Update operations | Mutating endpoints and round-trip flows: subscriptions and custom titles, edit-tag read/star cycles, rename/disable-tag, OPML import/export and title preservation, mark-all-as-read. |
+| `test/04-feed-ingestion.test.js` | Feed ingestion | **Server behavior, not protocol contract.** Verifies fetching, article updates, feed metadata, title overrides, and unsubscribe cleanup. |
 
-The first three are protocol contract tests: a server that fails any of them
-will break real greader clients. The fourth is a server-behavior test: the
-greader API has no refresh endpoint, so it exercises the server's
-out-of-band feed fetching.
+The first three exercise the protocol contract and client-visible compatibility.
+Not every divergence necessarily breaks every client; known implementation
+shape differences are skipped or documented where practical. The fourth is a
+server-behavior test: the greader API has no refresh endpoint, so it exercises
+the server's out-of-band feed fetching.
 
 ### Feed ingestion tests
 
@@ -56,8 +57,12 @@ These start a bundled in-process RSS 2.0 feed server (`lib/feed-server.js`),
 subscribe the greader server to it, force a refresh, and poll `stream/contents`
 to assert that:
 
-- new items added to the feed appear after a refresh, and
-- an item updated in place (same `<guid>`) is reflected with its new title.
+- new items added to the feed appear after a refresh;
+- an item updated in place (same `<guid>`) is reflected with its new title;
+- channel title and site URL appear in subscriptions and item origins;
+- explicit subscription titles survive feed refreshes;
+- changed channel metadata can be reflected by implementations that track it;
+- unsubscribing removes the feed and its items from associated streams.
 
 Since the greader API has no refresh primitive, the suite forces a refresh
 through `lib/refresh.js`, which tries two strategies in order:
@@ -72,10 +77,11 @@ through `lib/refresh.js`, which tries two strategies in order:
    empty-but-valid OPML triggers a refresh of all feeds without changing
    subscriptions. Any server that refreshes-after-import behaves the same.
 
-The bundled feed server listens on `127.0.0.1` by default. For a server on
-the same host (the common case) this just works. If the greader server runs
-on a different host, set `GREADER_FEED_PUBLIC_URL` to an address that host
-can resolve.
+The bundled feed server binds to `0.0.0.0` on an ephemeral port by default.
+For a server on the same host this works without additional configuration. If
+the greader server runs in Docker, set `GREADER_FEED_PUBLIC_HOST` to the host's
+bridge address. For a server on another host, set `GREADER_FEED_PUBLIC_URL` to
+a complete URL that server can reach.
 
 ## Configuration
 
@@ -123,8 +129,8 @@ Run only the read-only contract tests:
 GREADER_SKIP_WRITES=1 npm test
 ```
 
-Run everything including ingestion against a local FreshRSS (which refreshes
-on OPML import, so no `GREADER_REFRESH_CMD` is needed):
+Run everything including ingestion against a local server that refreshes feeds
+as a side effect of OPML import:
 
 ```sh
 export GREADER_BASE_URL=https://localhost/api/greader.php
@@ -147,16 +153,20 @@ npm test
 
 ## Reference-server harnesses
 
-`docker/` contains harnesses that bring up a reference greader server in a
-container and run the whole suite against it. Each implementation gets its
-own subdirectory so the harnesses can serve as templates for new servers:
+`docker/` contains harnesses that bring up reference greader servers in
+containers and run the whole suite against them. Each implementation has its
+own subdirectory:
 
 ```
-docker/freshrss/             FreshRSS reference harness (template for new ones)
+docker/freshrss/             FreshRSS reference harness
   docker-compose.yml         brings up the server container
   provision-freshrss.sh      creates user + API password, fixes permissions
   env.sh                     exports GREADER_* to point at the container
   freshrss-data/             server runtime state (gitignored)
+docker/miniflux/             Miniflux compatibility harness
+  docker-compose.yml         brings up Miniflux and PostgreSQL
+  provision-miniflux.sh      enables Google Reader credentials
+  env.sh                     exports GREADER_* and the refresh command
 ```
 
 Run the FreshRSS reference suite end-to-end:
@@ -168,13 +178,17 @@ source docker/freshrss/env.sh   # exports GREADER_* to point at the container
 npm test
 ```
 
-To add a harness for another server (Tiny Tiny RSS + greader plugin, Miniflux
-greader adapter, …), copy the `docker/freshrss/` layout: a `docker-compose.yml`
-that brings up the server, a `provision-<server>.sh` that creates the user and
-API password and fixes container permissions, and an `env.sh` that exports the
-`GREADER_*` vars (notably `GREADER_FEED_PUBLIC_HOST` so the container can
-reach the host's bundled feed server, and `GREADER_REFRESH_CMD` if the server
-has a proprietary refresh).
+Run Miniflux similarly, substituting `docker/miniflux` and
+`provision-miniflux.sh` in those commands.
+
+Both checked-in harnesses set `GREADER_REFRESH_CMD` for faster, deterministic
+refreshes. The OPML-import fallback remains available for compatible servers.
+
+To add a harness for another server (Tiny Tiny RSS + greader plugin, …), copy
+the `docker/freshrss/` layout: a `docker-compose.yml` that brings up the server,
+a `provision-<server>.sh` that creates the user and API password, and an
+`env.sh` that exports the `GREADER_*` vars (notably
+`GREADER_FEED_PUBLIC_HOST` and, where available, `GREADER_REFRESH_CMD`).
 
 ## Layout
 
@@ -188,5 +202,6 @@ test/01-auth.test.js             authentication
 test/02-read-endpoints.test.js   GET operations
 test/03-write-endpoints.test.js  update operations
 test/04-feed-ingestion.test.js   feed ingestion (server behavior)
-docker/freshrss/                FreshRSS reference harness (template for more servers)
+docker/freshrss/                FreshRSS reference harness
+docker/miniflux/                Miniflux compatibility harness
 ```
