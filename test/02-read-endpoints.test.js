@@ -140,15 +140,6 @@ test('stream contents of reading-list returns a valid item feed', { timeout: 600
   }
 });
 
-test('stream contents respects the n (count) parameter', { timeout: 60000 }, async (t) => {
-  if (skipUnlessConfigured(t)) return;
-  const { json: all } = await client.streamContents(STATE.READING_LIST, { n: 50 });
-  if (!all || !Array.isArray(all.items)) { t.skip('stream/contents does not return { items } for reading-list'); return; }
-  if (all.items.length < 2) { t.skip('not enough items to test n'); return; }
-  const { json: few } = await client.streamContents(STATE.READING_LIST, { n: 1 });
-  assert.ok(few.items.length <= 1, 'n=1 must return at most 1 item');
-});
-
 test('stream contents honors xt (exclude read) returning only unread', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   const { json } = await client.streamContents(STATE.READING_LIST, { n: 20, xt: STATE.READ });
@@ -158,17 +149,6 @@ test('stream contents honors xt (exclude read) returning only unread', { timeout
       !item.categories.includes(STATE.READ),
       'with xt=user/-/state/com.google/read no returned item may carry the read state',
     );
-  }
-});
-
-test('stream contents r=o returns ascending order (oldest first)', { timeout: 60000 }, async (t) => {
-  if (skipUnlessConfigured(t)) return;
-  const { json } = await client.streamContents(STATE.READING_LIST, { n: 10, r: 'o' });
-  if (!json || !Array.isArray(json.items)) { t.skip('stream/contents does not return { items } for reading-list'); return; }
-  if (json.items.length < 2) { t.skip('not enough items to test ordering'); return; }
-  const ts = (it) => Number(it.timestampUsec || (it.published ? it.published * 1e6 : 0));
-  for (let i = 1; i < json.items.length; i++) {
-    assert.ok(ts(json.items[i]) >= ts(json.items[i - 1]), 'ascending order: timestamps must be non-decreasing');
   }
 });
 

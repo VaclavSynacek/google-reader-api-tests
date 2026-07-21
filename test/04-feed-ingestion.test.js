@@ -237,6 +237,52 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
   assert.ok(grew, 'a newly added feed item did not appear after refresh; server may not be re-fetching on refresh');
 });
 
+test('ingestion: stream contents honors count and oldest-first ordering', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  const base = Date.now() - 3600000;
+  feedServer.addItem({ title: 'Ordering oldest ' + uniqueLabel(''), pubDate: new Date(base) });
+  feedServer.addItem({ title: 'Ordering middle ' + uniqueLabel(''), pubDate: new Date(base + 60000) });
+  feedServer.addItem({ title: 'Ordering newest ' + uniqueLabel(''), pubDate: new Date(base + 120000) });
+
+  const token = await client.postToken();
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token });
+  assert.equal(sub, 200, 'subscribe must succeed');
+  t.after(async () => {
+    try {
+      const { json } = await client.subscriptionList();
+      const found = json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const r = await refreshFeeds(client, cfg);
+  if (!r.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  assert.ok(feedStreamId, 'subscribed feed must appear in subscription/list');
+  const ingested = await poll('ordered fixture items appear', async () => (
+    (await feedItemCount(feedStreamId)) >= 3
+  ), { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(ingested, 'server must ingest all three ordering fixture items');
+
+  const { json: few } = await client.streamContents(feedStreamId, { n: 1 });
+  if (!few || !Array.isArray(few.items)) {
+    t.skip('feed stream/contents does not return { items } (known compatibility difference)');
+    return;
+  }
+  assert.equal(few.items.length, 1, 'n=1 must return exactly one item when the feed has three');
+
+  const { json: oldestFirst } = await client.streamContents(feedStreamId, { n: 3, r: 'o' });
+  assert.ok(oldestFirst && Array.isArray(oldestFirst.items), 'feed stream must return an items array');
+  assert.equal(oldestFirst.items.length, 3, 'n=3 must return all three fixture items');
+  const ts = (item) => Number(item.timestampUsec || (item.published ? item.published * 1e6 : 0));
+  for (let i = 1; i < oldestFirst.items.length; i += 1) {
+    assert.ok(ts(oldestFirst.items[i]) >= ts(oldestFirst.items[i - 1]), 'r=o timestamps must be non-decreasing');
+  }
+});
+
 test('ingestion: an updated item is reflected in the feed', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;
