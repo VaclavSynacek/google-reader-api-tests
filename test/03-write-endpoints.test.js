@@ -93,6 +93,36 @@ test('subscribe -> appears in list -> unsubscribe -> gone', { timeout: 60000 }, 
   );
 });
 
+test('subscription edit persists a custom feed title', { timeout: 60000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfWritesDisabled(t)) return;
+
+  await unsubscribeFeedIfPresent();
+  const token = await client.postToken();
+  const { status: subscribeStatus } = await client.subscriptionEdit({
+    ac: 'subscribe', s: feed(feedUrl), T: token,
+  });
+  assert.equal(subscribeStatus, 200);
+
+  const { json: subscribed } = await client.subscriptionList();
+  const found = subscribed.subscriptions.find((s) => s.url === feedUrl);
+  assert.ok(found, 'newly subscribed feed must appear in subscription/list');
+  t.after(async () => {
+    try { await unsubscribeFeedIfPresent(); } catch { /* ignore */ }
+  });
+
+  const customTitle = 'Edited title ' + uniqueLabel('');
+  const { status: editStatus } = await client.subscriptionEdit({
+    ac: 'edit', s: found.id, t: customTitle, T: token,
+  });
+  assert.equal(editStatus, 200, 'subscription edit must return HTTP 200');
+
+  const { json: edited } = await client.subscriptionList();
+  const after = edited.subscriptions.find((s) => s.id === found.id || s.url === feedUrl);
+  assert.ok(after, 'edited subscription must remain in subscription/list');
+  assert.equal(after.title, customTitle, 'subscription edit t must persist the custom title');
+});
+
 test('quickadd subscribes by URL and returns numResults', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfWritesDisabled(t)) return;
@@ -227,6 +257,34 @@ test('subscription/export returns OPML XML', { timeout: 60000 }, async (t) => {
   // OPML root element. Be lenient about leading whitespace/doctype.
   assert.match(text, /<opml\b/i, 'export body must be an <opml> document');
   assert.match(text, /<body\b/i, 'opml must contain a <body>');
+});
+
+test('subscription import preserves an explicit OPML title', { timeout: 60000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfWritesDisabled(t)) return;
+
+  await unsubscribeFeedIfPresent();
+  const importedTitle = 'Imported title ' + uniqueLabel('');
+  const opml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<opml version="2.0">',
+    '  <head><title>contract-test</title></head>',
+    '  <body>',
+    `    <outline type="rss" text="${importedTitle}" title="${importedTitle}" xmlUrl="${feedUrl}" htmlUrl="https://example.test/imported/"/>`,
+    '  </body>',
+    '</opml>',
+  ].join('\n');
+  const token = await client.postToken();
+  const { status } = await client.subscriptionImport(opml, token);
+  assert.ok(status >= 200 && status < 300, `import must succeed (2xx), got ${status}`);
+  t.after(async () => {
+    try { await unsubscribeFeedIfPresent(); } catch { /* ignore */ }
+  });
+
+  const { json } = await client.subscriptionList();
+  const found = json.subscriptions.find((s) => s.url === feedUrl);
+  assert.ok(found, 'OPML feed outline must create a subscription');
+  assert.equal(found.title, importedTitle, 'OPML title/text must be preserved as the subscription title');
 });
 
 test('subscription/import accepts OPML and returns 2xx', { timeout: 60000 }, async (t) => {

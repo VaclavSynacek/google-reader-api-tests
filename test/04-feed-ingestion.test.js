@@ -90,6 +90,93 @@ after(async () => {
 
 // ---------------------------------------------------------------------------
 
+test('ingestion: feed metadata appears in subscriptions and item origins and follows feed changes', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  const initialTitle = 'Metadata Initial ' + uniqueLabel('');
+  const changedTitle = 'Metadata Changed ' + uniqueLabel('');
+  const initialLink = 'https://example.test/metadata-initial/';
+  const changedLink = 'https://example.test/metadata-changed/';
+  feedServer.setMetadata({ title: initialTitle, link: initialLink });
+  feedServer.addItem({ title: 'Metadata item ' + uniqueLabel('') });
+
+  const token = await client.postToken();
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token });
+  assert.equal(sub, 200, 'subscribe must succeed');
+  t.after(async () => {
+    try {
+      const { json } = await client.subscriptionList();
+      const found = json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const r = await refreshFeeds(client, cfg);
+  if (!r.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  assert.ok(feedStreamId, 'subscribed feed must appear in subscription/list');
+
+  const initialSeen = await poll('initial feed metadata appears', async () => {
+    const { json } = await client.subscriptionList();
+    const found = json.subscriptions.find((s) => s.url === feedUrl);
+    return found && found.title === initialTitle && found.htmlUrl === initialLink && found;
+  }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(initialSeen, 'subscription title/htmlUrl must come from RSS channel metadata');
+  assert.equal(initialSeen.url, feedUrl, 'subscription feed URL must remain unchanged');
+
+  const originSeen = await poll('item origin metadata appears', async () => {
+    const items = await feedItems(feedStreamId);
+    return items.find((item) => item.origin && item.origin.title === initialTitle && item.origin.htmlUrl === initialLink);
+  }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(originSeen, 'item origin must expose the discovered feed title and site URL');
+  if (originSeen.origin.feedUrl !== undefined) assert.equal(originSeen.origin.feedUrl, feedUrl);
+
+  feedServer.setMetadata({ title: changedTitle, link: changedLink });
+  if (cfg.ingestionRefreshDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, cfg.ingestionRefreshDelayMs));
+  const r2 = await refreshFeeds(client, cfg);
+  assert.ok(r2.ok, 'second refresh must be available');
+
+  const changedSeen = await poll('changed feed metadata appears', async () => {
+    const { json } = await client.subscriptionList();
+    const found = json.subscriptions.find((s) => s.url === feedUrl);
+    return found && found.title === changedTitle && found.htmlUrl === changedLink && found;
+  }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(changedSeen, 'feed-discovered title and htmlUrl must update when channel metadata changes');
+});
+
+test('ingestion: an explicit subscription title survives feed refreshes', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  const feedTitle = 'Published title ' + uniqueLabel('');
+  const customTitle = 'Custom title ' + uniqueLabel('');
+  feedServer.setMetadata({ title: feedTitle, link: 'https://example.test/custom-title/' });
+  feedServer.addItem({ title: 'Custom-title item ' + uniqueLabel('') });
+
+  const token = await client.postToken();
+  const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), t: customTitle, T: token });
+  assert.equal(sub, 200, 'subscribe with t must succeed');
+  t.after(async () => {
+    try {
+      const { json } = await client.subscriptionList();
+      const found = json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const r = await refreshFeeds(client, cfg);
+  if (!r.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const preserved = await poll('custom title survives refresh', async () => {
+    const { json } = await client.subscriptionList();
+    const found = json.subscriptions.find((s) => s.url === feedUrl);
+    return found && found.title === customTitle && found;
+  }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(preserved, 'explicit subscription title must override the title published by the feed');
+});
+
 test('ingestion: new items in the feed appear after refresh', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;
