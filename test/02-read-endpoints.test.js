@@ -168,27 +168,3 @@ test('stream/items/ids returns itemRefs (numeric ids)', { timeout: 60000 }, asyn
     assert.ok(/^\d+$/.test(ref.id), 'ref.id must be a decimal string (FreshRSS) — long-tag form also accepted by /contents');
   }
 });
-
-// ---- stream/items/contents (hydrate by id) --------------------------------
-
-test('stream/items/contents hydrates ids returned by items/ids', { timeout: 60000 }, async (t) => {
-  if (skipUnlessConfigured(t)) return;
-  const { json: refs } = await client.streamItemIds(STATE.READING_LIST, { n: 3 });
-  if (!refs.itemRefs || refs.itemRefs.length === 0) {
-    t.skip('no items to hydrate');
-    return;
-  }
-  const ids = refs.itemRefs.slice(0, 3).map((r) => r.id);
-  const token = await client.postToken();
-  const { status, json, text } = await client.streamItemsContents(ids, 'd', token);
-  if (status === 400 && /only json output/i.test(text)) {
-    t.skip('server requires a non-standard output=json form parameter for stream/items/contents');
-    return;
-  }
-  assert.equal(status, 200);
-  assert.ok(json && Array.isArray(json.items), 'must return items array');
-  assert.equal(json.items.length, ids.length, 'must return exactly the requested items');
-  for (const item of json.items) {
-    assert.match(item.id, /^tag:google\.com,2005:reader\/item\//);
-  }
-});

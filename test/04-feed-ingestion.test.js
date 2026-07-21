@@ -267,6 +267,20 @@ test('ingestion: stream contents honors count and oldest-first ordering', { time
   ), { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
   assert.ok(ingested, 'server must ingest all three ordering fixture items');
 
+  const refs = await feedItemRefs(feedStreamId);
+  const ids = refs.slice(0, 3).map((ref) => ref.id);
+  assert.equal(ids.length, 3, 'stream/items/ids must return the three fixture item IDs');
+  const hydrateToken = await client.postToken();
+  const { status: hydrateStatus, json: hydrated, text: hydrateText } = await client.streamItemsContents(ids, 'd', hydrateToken);
+  if (hydrateStatus === 400 && /only json output/i.test(hydrateText)) {
+    t.skip('server requires a non-standard output=json parameter for stream/items/contents');
+    return;
+  }
+  assert.equal(hydrateStatus, 200, 'stream/items/contents must accept IDs returned by stream/items/ids');
+  assert.ok(hydrated && Array.isArray(hydrated.items), 'hydration must return an items array');
+  assert.equal(hydrated.items.length, ids.length, 'hydration must return exactly the requested items');
+  for (const item of hydrated.items) assert.match(item.id, /^tag:google\.com,2005:reader\/item\//);
+
   const { json: few } = await client.streamContents(feedStreamId, { n: 1 });
   if (!few || !Array.isArray(few.items)) {
     t.skip('feed stream/contents does not return { items } (known compatibility difference)');
