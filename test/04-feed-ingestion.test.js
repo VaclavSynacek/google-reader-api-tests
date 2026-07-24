@@ -237,14 +237,14 @@ test('ingestion: new items in the feed appear after refresh', { timeout: 240000 
   assert.ok(grew, 'a newly added feed item did not appear after refresh; server may not be re-fetching on refresh');
 });
 
-test('ingestion: stream contents honors count and oldest-first ordering', { timeout: 240000 }, async (t) => {
+test('ingestion: stream queries honor count, ordering, hydration, ot and nt', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;
 
-  const base = Date.now() - 3600000;
-  feedServer.addItem({ title: 'Ordering oldest ' + uniqueLabel(''), pubDate: new Date(base) });
-  feedServer.addItem({ title: 'Ordering middle ' + uniqueLabel(''), pubDate: new Date(base + 60000) });
-  feedServer.addItem({ title: 'Ordering newest ' + uniqueLabel(''), pubDate: new Date(base + 120000) });
+  const base = (Math.floor(Date.now() / 1000) - 3600) * 1000;
+  for (let i = 0; i < 8; i += 1) {
+    feedServer.addItem({ title: `Ordering item ${i} ` + uniqueLabel(''), pubDate: new Date(base + (i * 60000)) });
+  }
 
   const token = await client.postToken();
   const { status: sub } = await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token });
@@ -263,38 +263,51 @@ test('ingestion: stream contents honors count and oldest-first ordering', { time
   const feedStreamId = await findFeedStreamId(feedUrl);
   assert.ok(feedStreamId, 'subscribed feed must appear in subscription/list');
   const ingested = await poll('ordered fixture items appear', async () => (
-    (await feedItemCount(feedStreamId)) >= 3
+    (await feedItemCount(feedStreamId)) >= 8
   ), { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
-  assert.ok(ingested, 'server must ingest all three ordering fixture items');
+  assert.ok(ingested, 'server must ingest all eight ordering fixture items');
 
   const refs = await feedItemRefs(feedStreamId);
   const ids = refs.slice(0, 3).map((ref) => ref.id);
-  assert.equal(ids.length, 3, 'stream/items/ids must return the three fixture item IDs');
   const hydrateToken = await client.postToken();
-  const { status: hydrateStatus, json: hydrated, text: hydrateText } = await client.streamItemsContents(ids, 'd', hydrateToken);
+  const { status: hydrateStatus, json: hydrated, text: hydrateText } = await client.streamItemsContents(
+    [...ids, '999999999999999999'], 'd', hydrateToken
+  );
   if (hydrateStatus === 400 && /only json output/i.test(hydrateText)) {
     t.skip('server requires a non-standard output=json parameter for stream/items/contents');
     return;
   }
   assert.equal(hydrateStatus, 200, 'stream/items/contents must accept IDs returned by stream/items/ids');
   assert.ok(hydrated && Array.isArray(hydrated.items), 'hydration must return an items array');
-  assert.equal(hydrated.items.length, ids.length, 'hydration must return exactly the requested items');
+  assert.equal(hydrated.items.length, ids.length, 'hydration must return existing requested items and ignore a missing ID');
   for (const item of hydrated.items) assert.match(item.id, /^tag:google\.com,2005:reader\/item\//);
 
   const { json: few } = await client.streamContents(feedStreamId, { n: 1 });
-  if (!few || !Array.isArray(few.items)) {
-    t.skip('feed stream/contents does not return { items } (known compatibility difference)');
-    return;
-  }
-  assert.equal(few.items.length, 1, 'n=1 must return exactly one item when the feed has three');
+  assert.ok(few && Array.isArray(few.items), 'feed stream must return an items array');
+  assert.equal(few.items.length, 1, 'n=1 must return exactly one item');
 
-  const { json: oldestFirst } = await client.streamContents(feedStreamId, { n: 3, r: 'o' });
+  const { json: oldestFirst } = await client.streamContents(feedStreamId, { n: 8, r: 'o' });
   assert.ok(oldestFirst && Array.isArray(oldestFirst.items), 'feed stream must return an items array');
-  assert.equal(oldestFirst.items.length, 3, 'n=3 must return all three fixture items');
+  assert.equal(oldestFirst.items.length, 8, 'n=8 must return all fixture items');
   const ts = (item) => Number(item.timestampUsec || (item.published ? item.published * 1e6 : 0));
   for (let i = 1; i < oldestFirst.items.length; i += 1) {
     assert.ok(ts(oldestFirst.items[i]) >= ts(oldestFirst.items[i - 1]), 'r=o timestamps must be non-decreasing');
   }
+
+  // Both filters are strict. These queries deliberately place all matches
+  // beyond the first five rows in query order, catching implementations that
+  // fetch a fixed oversample window and filter afterward.
+  const nt = Math.floor((base + 120000) / 1000);
+  const olderRefs = await client.streamItemIds(feedStreamId, { n: 1, nt });
+  assert.equal(olderRefs.status, 200);
+  assert.equal(olderRefs.json.itemRefs.length, 1, 'nt must still fill n when older matches exist');
+  const olderHydrated = await client.streamItemsContents([olderRefs.json.itemRefs[0].id], 'd', hydrateToken);
+  assert.ok(ts(olderHydrated.json.items[0]) < nt * 1e6, 'nt must exclude the boundary and newer items');
+
+  const ot = Math.floor((base + 240000) / 1000);
+  const { json: newerOldestFirst } = await client.streamContents(feedStreamId, { n: 1, r: 'o', ot });
+  assert.equal(newerOldestFirst.items.length, 1, 'ot must still fill n when newer matches exist');
+  assert.ok(ts(newerOldestFirst.items[0]) > ot * 1e6, 'ot must exclude the boundary and older items');
 });
 
 test('ingestion: an updated item is reflected in the feed', { timeout: 240000 }, async (t) => {
@@ -326,9 +339,17 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
   const feedStreamId = await findFeedStreamId(feedUrl);
   if (!feedStreamId) { t.skip('subscribed feed not found'); return; }
 
-  await poll('original item appears', async () => (await feedItemCount(feedStreamId)) >= 1, {
-    timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs,
+  const original = await poll('original item appears', async () => (
+    (await feedItems(feedStreamId)).find((it) => it.title && it.title.includes(marker))
+  ), { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(original, 'original item must appear before it can be updated');
+
+  // User-managed state must survive a crawler update of the same item.
+  const stateLabel = label(uniqueLabel('UpdateState'));
+  const stateUpdate = await client.editTag({
+    i: [original.id], a: [STATE.READ, STATE.STARRED, stateLabel], T: token,
   });
+  assert.equal(stateUpdate.status, 200, 'setting item state before refresh must succeed');
 
   // mutate the item in place (same guid) and refresh
   feedServer.updateItem(item.guid, { title: updated });
@@ -341,7 +362,7 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
   // Poll until the changed title is visible in stream/contents.
   const reflected = await poll('updated title appears', async () => {
     const items = await feedItems(feedStreamId);
-    return items.some((it) => it.title && it.title.includes(updated));
+    return items.find((it) => it.title && it.title.includes(updated));
   }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
 
   assert.ok(
@@ -349,6 +370,190 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
     `item title was not updated to "${updated}" within ${cfg.ingestionTimeoutMs}ms. ` +
     'Note: some servers cache article bodies by guid and ignore title updates; this is a known compatibility divergence.',
   );
+  assert.ok(reflected.categories.includes(STATE.READ), 'read state must survive an update of the same feed item');
+  assert.ok(reflected.categories.includes(STATE.STARRED), 'starred state must survive an update of the same feed item');
+  assert.ok(reflected.categories.includes(stateLabel), 'labels must survive an update of the same feed item');
+});
+
+test('ingestion: edit-tag changes only the requested item', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  feedServer.addItem({ title: 'Isolation target ' + uniqueLabel('') });
+  feedServer.addItem({ title: 'Isolation control ' + uniqueLabel('') });
+  const token = await client.postToken();
+  assert.equal((await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token })).status, 200);
+  t.after(async () => {
+    try {
+      const found = (await client.subscriptionList()).json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const refresh = await refreshFeeds(client, cfg);
+  if (!refresh.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  const ready = await poll('isolation items appear', async () => (await feedItems(feedStreamId)).length >= 2, {
+    timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs,
+  });
+  assert.ok(ready, 'both isolation items must be ingested');
+  const [target, control] = await feedItems(feedStreamId);
+  const isolatedLabel = label(uniqueLabel('Isolation'));
+  assert.equal((await client.editTag({
+    i: [target.id], a: [STATE.READ, STATE.STARRED, isolatedLabel], T: token,
+  })).status, 200);
+
+  const hydrated = await client.streamItemsContents([target.id, control.id], 'd', token);
+  const changed = hydrated.json.items.find((item) => item.id === target.id);
+  const unchanged = hydrated.json.items.find((item) => item.id === control.id);
+  assert.ok(changed.categories.includes(STATE.READ));
+  assert.ok(changed.categories.includes(STATE.STARRED));
+  assert.ok(changed.categories.includes(isolatedLabel));
+  assert.ok(!unchanged.categories.includes(STATE.READ), 'editing one item must not mark another item read');
+  assert.ok(!unchanged.categories.includes(STATE.STARRED), 'editing one item must not star another item');
+  assert.ok(!unchanged.categories.includes(isolatedLabel), 'editing one item must not label another item');
+});
+
+test('ingestion: unread-count follows item state transitions', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  const base = (Math.floor(Date.now() / 1000) - 1800) * 1000;
+  for (let i = 0; i < 3; i += 1) {
+    feedServer.addItem({ title: `Unread item ${i} ` + uniqueLabel(''), pubDate: new Date(base + (i * 60000)) });
+  }
+  const token = await client.postToken();
+  assert.equal((await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token })).status, 200);
+  t.after(async () => {
+    try {
+      const found = (await client.subscriptionList()).json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const refresh = await refreshFeeds(client, cfg);
+  if (!refresh.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  const ready = await poll('unread fixtures appear', async () => (await feedItems(feedStreamId)).length >= 3, {
+    timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs,
+  });
+  assert.ok(ready, 'three unread fixtures must be ingested');
+  const items = await feedItems(feedStreamId);
+  const newest = items.reduce((a, b) => Number(a.timestampUsec) > Number(b.timestampUsec) ? a : b);
+  const remainingNewest = String(Math.max(...items.filter((item) => item.id !== newest.id).map((item) => Number(item.timestampUsec))));
+
+  const initial = (await client.unreadCount()).json.unreadcounts.find((entry) => entry.id === feedStreamId);
+  assert.equal(initial.count, 3);
+  assert.equal(String(initial.newestItemTimestampUsec), String(newest.timestampUsec));
+
+  assert.equal((await client.editTag({ i: [newest.id], a: [STATE.READ], T: token })).status, 200);
+  const reduced = await poll('unread count decreases', async () => {
+    const entry = (await client.unreadCount()).json.unreadcounts.find((value) => value.id === feedStreamId);
+    return entry && entry.count === 2 && entry;
+  }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(reduced, 'marking one item read must reduce its feed unread count');
+  assert.equal(String(reduced.newestItemTimestampUsec), remainingNewest);
+
+  assert.equal((await client.editTag({ i: [newest.id], r: [STATE.READ], T: token })).status, 200);
+  const restored = await poll('unread count is restored', async () => {
+    const entry = (await client.unreadCount()).json.unreadcounts.find((value) => value.id === feedStreamId);
+    return entry && entry.count === 3 && entry;
+  }, { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(restored, 'removing read state must restore the feed unread count');
+  assert.equal(String(restored.newestItemTimestampUsec), String(newest.timestampUsec));
+});
+
+test('ingestion: mark-all-as-read respects label scope and cutoff', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  const base = (Math.floor(Date.now() / 1000) - 1200) * 1000;
+  const oldTitle = 'Mark old labelled ' + uniqueLabel('');
+  const newTitle = 'Mark new labelled ' + uniqueLabel('');
+  const controlTitle = 'Mark control ' + uniqueLabel('');
+  feedServer.addItem({ title: oldTitle, pubDate: new Date(base) });
+  feedServer.addItem({ title: newTitle, pubDate: new Date(base + 120000) });
+  feedServer.addItem({ title: controlTitle, pubDate: new Date(base) });
+  const token = await client.postToken();
+  assert.equal((await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token })).status, 200);
+  t.after(async () => {
+    try {
+      const found = (await client.subscriptionList()).json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const refresh = await refreshFeeds(client, cfg);
+  if (!refresh.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  const ready = await poll('mark-all fixtures appear', async () => (await feedItems(feedStreamId)).length >= 3, {
+    timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs,
+  });
+  assert.ok(ready, 'all mark-all fixtures must be ingested');
+  const items = await feedItems(feedStreamId);
+  const oldTarget = items.find((item) => item.title === oldTitle);
+  const newTarget = items.find((item) => item.title === newTitle);
+  const control = items.find((item) => item.title === controlTitle);
+  const targetLabel = label(uniqueLabel('MarkScope'));
+  assert.equal((await client.editTag({ i: [oldTarget.id, newTarget.id], a: [targetLabel], T: token })).status, 200);
+  const cutoffNs = (BigInt(base + 60000) * 1000000n).toString();
+  assert.equal((await client.markAllAsRead({ s: targetLabel, ts: cutoffNs, T: token })).status, 200);
+
+  const hydrated = await client.streamItemsContents([oldTarget.id, newTarget.id, control.id], 'd', token);
+  const oldAfter = hydrated.json.items.find((item) => item.id === oldTarget.id);
+  const newAfter = hydrated.json.items.find((item) => item.id === newTarget.id);
+  const controlAfter = hydrated.json.items.find((item) => item.id === control.id);
+  assert.ok(oldAfter.categories.includes(STATE.READ), 'labelled item at or before cutoff must become read');
+  assert.ok(!newAfter.categories.includes(STATE.READ), 'labelled item newer than cutoff must remain unread');
+  assert.ok(!controlAfter.categories.includes(STATE.READ), 'marking a label read must not affect an unlabelled item');
+});
+
+test('ingestion: feed-scoped mark-all does not affect another feed', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+  if (cfg.feedPublicUrl) { t.skip('a fixed GREADER_FEED_PUBLIC_URL cannot expose a second dynamic feed'); return; }
+
+  const second = new FeedServer();
+  const started = await second.start({ bind: cfg.feedBind });
+  const secondUrl = resolveFeedPublicUrl(`127.0.0.1:${started.port}`, cfg);
+  feedServer.addItem({ title: 'First scoped feed ' + uniqueLabel('') });
+  second.addItem({ title: 'Second scoped feed ' + uniqueLabel('') });
+  const token = await client.postToken();
+  assert.equal((await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token })).status, 200);
+  assert.equal((await client.subscriptionEdit({ ac: 'subscribe', s: feed(secondUrl), T: token })).status, 200);
+  t.after(async () => {
+    try {
+      const subscriptions = (await client.subscriptionList()).json.subscriptions;
+      for (const url of [feedUrl, secondUrl]) {
+        const found = subscriptions.find((s) => s.url === url);
+        if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+      }
+    } catch { /* ignore */ }
+    feedServer.reset();
+    await second.stop();
+  });
+
+  const refresh = await refreshFeeds(client, cfg);
+  if (!refresh.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const firstStream = await findFeedStreamId(feedUrl);
+  const secondStream = await findFeedStreamId(secondUrl);
+  const ready = await poll('both scoped feeds appear', async () => (
+    (await feedItems(firstStream)).length >= 1 && (await feedItems(secondStream)).length >= 1
+  ), { timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs });
+  assert.ok(ready, 'both feeds must have an item');
+  const firstItem = (await feedItems(firstStream))[0];
+  const secondItem = (await feedItems(secondStream))[0];
+  const cutoffNs = ((BigInt(firstItem.timestampUsec) + 1000000n) * 1000n).toString();
+  assert.equal((await client.markAllAsRead({ s: firstStream, ts: cutoffNs, T: token })).status, 200);
+
+  const hydrated = await client.streamItemsContents([firstItem.id, secondItem.id], 'd', token);
+  const firstAfter = hydrated.json.items.find((item) => item.id === firstItem.id);
+  const secondAfter = hydrated.json.items.find((item) => item.id === secondItem.id);
+  assert.ok(firstAfter.categories.includes(STATE.READ), 'item in the selected feed must become read');
+  assert.ok(!secondAfter.categories.includes(STATE.READ), 'item in another feed must remain unread');
 });
 
 test('unsubscribe deletes the feed\'s items from every stream', { timeout: 240000 }, async (t) => {

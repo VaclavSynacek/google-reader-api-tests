@@ -208,11 +208,10 @@ test('edit-tag starring is observable in the starred stream', { timeout: 60000 }
 test('mark-all-as-read on reading-list returns OK', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfWritesDisabled(t)) return;
-  // We use a far-future ns cutoff so this is effectively a no-op (marks nothing
-  // older than now+1d) — safe to run without destroying user read-state.
-  const futureNs = String((Math.floor(Date.now() / 1000) + 86400) * 1e9);
+  // A zero cutoff is a genuine no-op: no normally timestamped item is older
+  // than or equal to the Unix epoch. A future cutoff would mark everything.
   const token = await client.postToken();
-  const { status, text } = await client.markAllAsRead({ s: STATE.READING_LIST, ts: futureNs, T: token });
+  const { status, text } = await client.markAllAsRead({ s: STATE.READING_LIST, ts: '0', T: token });
   assert.equal(status, 200);
   // FreshRSS returns "OK"; we accept any non-error body but record it.
   t.diagnostic('mark-all-as-read body = ' + JSON.stringify(text));
