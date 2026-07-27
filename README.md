@@ -1,15 +1,21 @@
 # Google Reader API Contract Tests
 
-A dependency-free Node.js test suite for the Google Reader-compatible API.
-The goal: if these tests pass against a server, that server can reasonably be
-expected to work with established greader client apps (Reeder, FeedMe, EasyRSS,
-News+, Newsboat, Read You, Vienna, …).
+A dependency-free Node.js test suite for Google Reader-compatible APIs.
+It validates the common client-visible contract and selected server behavior
+needed by established greader clients (Reeder, FeedMe, EasyRSS, News+,
+Newsboat, Read You, Vienna, …).
 
-The protocol contract being tested is documented in
-[`google-reader-api.openapi.yaml`](./google-reader-api.openapi.yaml), derived
-from FreshRSS source (`p/api/greader.php` and `Entry::toGReader()`). FreshRSS
-is the reference implementation; the API is wire-compatible across the
-Inoreader / The Old Reader / BazQux / FeedHQ ecosystem.
+The suite is implementation-neutral: no single server is treated as the
+reference implementation. Repository harnesses currently run it against
+FreshRSS, Miniflux, and lessRss, and more implementations can be added. A
+failure identifies a compatibility or capability difference; it does not
+necessarily mean that every greader client will fail against that server.
+
+The API surface being tested is documented in
+[`google-reader-api.openapi.yaml`](./google-reader-api.openapi.yaml). Because
+Google never published an official specification, that description combines
+historical Google Reader conventions, implementation source and behavior, and
+observations made while testing multiple compatible servers.
 
 ## Requirements
 
@@ -42,23 +48,25 @@ There are four independent groups, in separate files:
 |------|-------|------------------|
 | `test/01-auth.test.js` | Authentication | `ClientLogin` flow, POST token, auth rejection. Includes unit tests. |
 | `test/02-read-endpoints.test.js` | Read operations | Non-mutating endpoint and JSON-shape checks that do not require fixture data. |
-| `test/03-write-endpoints.test.js` | Update operations | Mutating endpoints and round-trip flows: subscriptions and custom titles, edit-tag read/star cycles, rename/disable-tag, OPML import/export and title preservation, mark-all-as-read. |
+| `test/03-write-endpoints.test.js` | Update operations | Mutating endpoints and round-trip flows: subscriptions, quickadd HTML feed discovery and selection, custom titles, edit-tag read/star cycles, rename/disable-tag, OPML import/export and title preservation, mark-all-as-read. |
 | `test/04-feed-ingestion.test.js` | Feed ingestion | **Server behavior, not protocol contract.** Verifies fetching, article updates, feed metadata, title overrides, and unsubscribe cleanup. |
 
-The first three exercise the protocol contract and client-visible compatibility.
-Groups 1 and 2 are non-mutating. Group 3 changes subscriptions and item state.
-The fourth is both a server-behavior and controlled-data test: because the
-greader API has no refresh endpoint, it creates temporary subscriptions and
-articles to exercise out-of-band fetching. Read semantics that need known prior
-data—count limits, ordering, and item hydration—also live in group 4.
+The first three exercise the wire protocol and directly client-visible
+compatibility, including quickadd discovery behavior. Groups 1 and 2 are
+non-mutating. Group 3 changes subscriptions and item state. The fourth is both
+a server-behavior and controlled-data test: because the greader API has no
+refresh endpoint, it creates temporary subscriptions and articles to exercise
+out-of-band fetching. Read semantics that need known prior data—count limits,
+ordering, and item hydration—also live in group 4.
 
 Not every divergence necessarily breaks every client; known implementation
 shape differences are skipped or documented where practical.
 
 ### Feed ingestion tests
 
-These start a bundled in-process RSS 2.0 feed server (`lib/feed-server.js`),
-subscribe the greader server to it, force a refresh, and poll `stream/contents`
+These use the bundled in-process fixture server (`lib/feed-server.js`), which
+serves RSS 2.0 feeds as well as HTML feed-discovery pages. They subscribe the
+greader server to a fixture, force a refresh, and poll `stream/contents`
 to assert that:
 
 - new items added to the feed appear after a refresh;
@@ -161,14 +169,14 @@ export GREADER_SKIP_WRITES=1          # skip group 3 (ingestion has its own togg
 npm test
 ```
 
-## Reference-server harnesses
+## Server implementation harnesses
 
-`docker/` contains harnesses that bring up reference greader servers in
-containers and run the whole suite against them. Each implementation has its
-own subdirectory:
+`docker/` contains harnesses that bring up supported greader server
+implementations in containers and run the suite against them. Each
+implementation has its own subdirectory:
 
 ```
-docker/freshrss/             FreshRSS reference harness
+docker/freshrss/             FreshRSS compatibility harness
   docker-compose.yml         brings up the server container
   provision-freshrss.sh      creates user + API password, fixes permissions
   env.sh                     exports GREADER_* to point at the container
@@ -183,7 +191,7 @@ docker/lessrss/              lessRss compatibility harness
   env.sh                     exports GREADER_* and uses OPML refresh
 ```
 
-Run the FreshRSS reference suite end-to-end:
+Run the suite against FreshRSS end-to-end:
 
 ```sh
 docker compose -f docker/freshrss/docker-compose.yml up -d
@@ -219,7 +227,7 @@ a `provision-<server>.sh` that creates the user and API password, and an
 ## Layout
 
 ```
-google-reader-api.openapi.yaml   the protocol contract (authoritative)
+google-reader-api.openapi.yaml   documented API surface and schemas
 lib/greader-client.js            wire client: GoogleLogin auth, form encoding, endpoints
 lib/test-helpers.js              env config + skip helpers
 lib/refresh.js                   refresh strategy: GREADER_REFRESH_CMD or OPML-import fallback
@@ -228,7 +236,7 @@ test/01-auth.test.js             authentication
 test/02-read-endpoints.test.js   GET operations
 test/03-write-endpoints.test.js  update operations
 test/04-feed-ingestion.test.js   feed ingestion (server behavior)
-docker/freshrss/                FreshRSS reference harness
+docker/freshrss/                FreshRSS compatibility harness
 docker/miniflux/                Miniflux compatibility harness
 docker/lessrss/                 lessRss compatibility harness
 ```

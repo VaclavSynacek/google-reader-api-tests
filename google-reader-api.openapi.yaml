@@ -1,54 +1,41 @@
 openapi: 3.0.3
 
 info:
-  title: Google Reader compatible API (FreshRSS)
+  title: Google Reader-compatible API
   description: |
-    OpenAPI description of the Google Reader-compatible API as implemented by
-    **FreshRSS** in `p/api/greader.php`. There is no official Google spec —
-    Google Reader was shut down in 2013 and never published one. The FreshRSS
-    implementation is the most complete and most actively maintained
-    open-source reference, and is wire-compatible with the same clients that
-    target Inoreader / The Old Reader / BazQux / FeedHQ (the "greader"
-    ecosystem). This document is derived directly from FreshRSS source:
-
-      * `p/api/greader.php`           — request dispatch + handlers
-      * `app/Models/Entry.php`        — `Entry::toGReader()` item schema
-      * `docs/en/developers/06_GoogleReader_API.md`
+    Implementation-neutral description of the common Google Reader-compatible
+    API surface exercised by this repository's test suite. Google Reader was
+    shut down in 2013 without an official published specification, so this
+    document combines historical conventions with source and observed behavior
+    from compatible implementations such as FreshRSS, Miniflux, and lessRss.
+    It can also be used when validating additional servers in the greader
+    ecosystem, including Inoreader / The Old Reader / BazQux / FeedHQ.
 
     Base path conventions:
-      * FreshRSS mounts the API at `{base}/api/greader.php`.
+      * Many self-hosted implementations mount the API at
+        `{base}/api/greader.php`; deployment-specific paths may differ.
       * The original Google Reader base was `https://www.google.com/reader`.
-      * In this document `servers` uses a FreshRSS example; adjust to your
-        instance (or to Inoreader / The Old Reader / BazQux, which share the
-        same path structure).
+      * Adjust the `servers` URL to the implementation under test.
 
-    Authentication: two-step.
-      1. `POST /accounts/ClientLogin` with `Email`/`Passwd` (the *API
-         password*, not the account password in FreshRSS). Returns
-         `Auth=<user>/<token>`.
-      2. Send `Authorization: GoogleLogin auth=<user>/<token>` on every
-         subsequent request. Write operations additionally require a one-time
-         token from `GET /reader/api/0/token`, sent in the `T` form field
-         (some clients send `T=x` or empty; FreshRSS tolerates that).
+    Authentication is generally two-step.
+      1. `POST /accounts/ClientLogin` with `Email`/`Passwd`. Some servers use a
+         dedicated API password rather than the account password. The response
+         includes `Auth=<user>/<token>`.
+      2. Send `Authorization: GoogleLogin auth=<user>/<token>` on subsequent
+         requests. Write operations additionally use a token from
+         `GET /reader/api/0/token`, sent in the `T` form field. Exact token
+         validation varies between implementations.
 
-    Notes on FreshRSS-specific behavior (still greader-compatible):
-      * State streams use both `com.google.*` (standard) and `org.freshrss.*`
-        (FreshRSS extensions: `main`, `important`).
-      * Several list endpoints require `?output=json`; anything else returns
-        HTTP 501 Not Implemented.
-      * Labels and categories are unified: a "label" is a FreshRSS category
-        or a dynamic tag.
+    Implementation extensions and differences are retained where clients may
+    encounter them. For example, FreshRSS adds `org.freshrss.*` state streams,
+    unifies labels and categories, and has endpoint-specific `output=json`
+    behavior. Such fields are identified as implementation-specific rather
+    than defining one server as authoritative.
   version: 1.0.0
-  contact:
-    name: FreshRSS
-    url: https://github.com/FreshRSS/FreshRSS
-  license:
-    name: AGPL-3.0
-    url: https://www.gnu.org/licenses/agpl-3.0.html
 
 servers:
-  - url: https://freshrss.example.net/api/greader.php
-    description: FreshRSS instance (replace with your own)
+  - url: https://reader.example.net/api/greader.php
+    description: Google Reader-compatible server (replace with your own)
 
 security:
   - GoogleLoginAuth: []
