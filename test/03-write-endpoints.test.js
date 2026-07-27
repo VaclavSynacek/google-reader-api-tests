@@ -30,9 +30,9 @@ after(async () => {
  * Remove any pre-existing subscription to our feed so a test starts from a
  * clean slate. Returns true if something was unsubscribed.
  */
-async function unsubscribeFeedIfPresent() {
+async function unsubscribeFeedIfPresent(url = feedUrl) {
   const { json } = await client.subscriptionList();
-  const existing = json.subscriptions.find((s) => s.url === feedUrl);
+  const existing = json.subscriptions.find((s) => s.url === url);
   if (existing) {
     const token = await client.postToken();
     await client.subscriptionEdit({ ac: 'unsubscribe', s: existing.id, T: token });
@@ -143,6 +143,54 @@ test('quickadd subscribes by URL and returns numResults', { timeout: 60000 }, as
   if (found) {
     await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: token });
   }
+});
+
+test('quickadd discovers feeds from HTML and prefers a well-named main feed', { timeout: 60000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfWritesDisabled(t)) return;
+
+  const pageUrl = new URL('discovery-good-name.html', feedUrl).href;
+  const commentsUrl = new URL('comments.xml', feedUrl).href;
+  const blogUrl = new URL('blog.xml', feedUrl).href;
+  await unsubscribeFeedIfPresent(commentsUrl);
+  await unsubscribeFeedIfPresent(blogUrl);
+  t.after(async () => {
+    try { await unsubscribeFeedIfPresent(commentsUrl); } catch { /* ignore */ }
+    try { await unsubscribeFeedIfPresent(blogUrl); } catch { /* ignore */ }
+  });
+
+  const token = await client.postToken();
+  const { status, json } = await client.quickAdd(pageUrl, token);
+  assert.equal(status, 200);
+  assert.equal(json?.numResults, 1, json?.error || 'HTML feed discovery failed');
+
+  const { json: list } = await client.subscriptionList();
+  assert.ok(list.subscriptions.some((s) => s.url === blogUrl), 'the well-named Blog feed must be selected');
+  assert.ok(!list.subscriptions.some((s) => s.url === commentsUrl), 'the earlier Comments Feed must not be selected');
+});
+
+test('quickadd uses HTML document order when no discovered feed has a preferred name', { timeout: 60000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfWritesDisabled(t)) return;
+
+  const pageUrl = new URL('discovery-document-order.html', feedUrl).href;
+  const firstUrl = new URL('first.xml', feedUrl).href;
+  const secondUrl = new URL('second.xml', feedUrl).href;
+  await unsubscribeFeedIfPresent(firstUrl);
+  await unsubscribeFeedIfPresent(secondUrl);
+  t.after(async () => {
+    try { await unsubscribeFeedIfPresent(firstUrl); } catch { /* ignore */ }
+    try { await unsubscribeFeedIfPresent(secondUrl); } catch { /* ignore */ }
+  });
+
+  const token = await client.postToken();
+  const { status, json } = await client.quickAdd(pageUrl, token);
+  assert.equal(status, 200);
+  assert.equal(json?.numResults, 1, json?.error || 'HTML feed discovery failed');
+
+  const { json: list } = await client.subscriptionList();
+  assert.ok(list.subscriptions.some((s) => s.url === firstUrl), 'the first feed in document order must be selected');
+  assert.ok(!list.subscriptions.some((s) => s.url === secondUrl), 'only one discovered feed should be subscribed');
 });
 
 // ---- edit-tag round trips (read + starred) --------------------------------

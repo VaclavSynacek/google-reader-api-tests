@@ -215,7 +215,7 @@ paths:
   /reader/api/0/subscription/quickadd:
     post:
       tags: [Subscription]
-      summary: Quick-add a feed by URL
+      summary: Quick-add a feed or discover one from a website URL
       requestBody:
         required: true
         content:
@@ -224,7 +224,7 @@ paths:
               type: object
               required: [quickadd]
               properties:
-                quickadd: { type: string, description: Feed URL }
+                quickadd: { type: string, description: Feed URL or website URL supporting feed autodiscovery }
       responses:
         '200':
           description: OK
