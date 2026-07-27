@@ -415,6 +415,56 @@ test('ingestion: edit-tag changes only the requested item', { timeout: 240000 },
   assert.ok(!unchanged.categories.includes(isolatedLabel), 'editing one item must not label another item');
 });
 
+test('ingestion: item endpoints accept decimal, tagged hexadecimal, and bare hexadecimal ids', { timeout: 240000 }, async (t) => {
+  if (skipUnlessConfigured(t)) return;
+  if (skipIfIngestionDisabled(t)) return;
+
+  for (let i = 0; i < 3; i += 1) {
+    feedServer.addItem({ title: `ID format item ${i} ` + uniqueLabel('') });
+  }
+  const token = await client.postToken();
+  assert.equal((await client.subscriptionEdit({ ac: 'subscribe', s: feed(feedUrl), T: token })).status, 200);
+  t.after(async () => {
+    try {
+      const found = (await client.subscriptionList()).json.subscriptions.find((s) => s.url === feedUrl);
+      if (found) await client.subscriptionEdit({ ac: 'unsubscribe', s: found.id, T: await client.postToken() });
+    } catch { /* ignore */ }
+    feedServer.reset();
+  });
+
+  const refresh = await refreshFeeds(client, cfg);
+  if (!refresh.ok) { t.skip('refresh mechanism unavailable'); return; }
+  const feedStreamId = await findFeedStreamId(feedUrl);
+  const ready = await poll('ID format items appear', async () => (await feedItems(feedStreamId)).length >= 3, {
+    timeoutMs: cfg.ingestionTimeoutMs, pollMs: cfg.ingestionPollMs,
+  });
+  assert.ok(ready, 'three ID format fixtures must be ingested');
+
+  const items = (await feedItems(feedStreamId)).slice(0, 3);
+  const taggedIds = items.map((item) => item.id);
+  const hexIds = taggedIds.map((id) => id.slice(id.lastIndexOf('/') + 1));
+  const decimalIds = hexIds.map((hex) => BigInt('0x' + hex).toString(10));
+  const formats = [decimalIds[0], taggedIds[1], hexIds[2]];
+  const formatNames = ['bare decimal', 'tagged hexadecimal', 'bare hexadecimal'];
+
+  for (let i = 0; i < formats.length; i += 1) {
+    const hydrated = await client.streamItemsContents([formats[i]], 'd', token);
+    assert.equal(hydrated.status, 200, `${formatNames[i]} hydration must succeed`);
+    assert.deepEqual(
+      hydrated.json.items.map((item) => item.id),
+      [taggedIds[i]],
+      `${formatNames[i]} must hydrate the corresponding item`,
+    );
+    assert.equal((await client.editTag({ i: [formats[i]], a: [STATE.READ], T: token })).status, 200);
+  }
+
+  const after = await client.streamItemsContents(taggedIds, 'd', token);
+  for (let i = 0; i < taggedIds.length; i += 1) {
+    const item = after.json.items.find((candidate) => candidate.id === taggedIds[i]);
+    assert.ok(item.categories.includes(STATE.READ), `${formatNames[i]} must identify the item for edit-tag`);
+  }
+});
+
 test('ingestion: unread-count follows item state transitions', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;

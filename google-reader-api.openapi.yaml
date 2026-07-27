@@ -329,8 +329,9 @@ paths:
       summary: Get full items by id
       description: |
         Hydrate a set of item ids into full item objects. Item ids are sent as
-        repeated `i` fields, either as the long greader form
-        `tag:google.com,2005:reader/item/<hex>` or as bare decimal ids.
+        repeated `i` fields in any of the forms accepted by FreshRSS: the long
+        greader form `tag:google.com,2005:reader/item/<hex>`, a bare decimal id,
+        or the bare hexadecimal suffix used by clients such as FeedFlow.
       requestBody:
         required: true
         content:
@@ -391,7 +392,8 @@ paths:
           * `user/-/state/com.google/starred`
           * `user/-/label/<Name>` — dynamic label/tag
         `broadcast`, `like`, `tracking-kept-unread` are accepted but no-ops.
-        `i` is repeatable item id. Requires POST token `T`.
+        `i` is a repeatable item id in long greader hexadecimal, bare decimal,
+        or bare hexadecimal form. Requires POST token `T`.
       requestBody:
         required: true
         content:
@@ -400,7 +402,7 @@ paths:
               type: object
               properties:
                 T: { type: string, description: POST token from /token }
-                i: { type: array, items: { type: string }, description: Item id (repeatable) }
+                i: { type: array, items: { type: string }, description: Item id in tagged hexadecimal, bare decimal, or bare hexadecimal form (repeatable). }
                 a: { type: array, items: { type: string }, description: Tag to add (repeatable) }
                 r: { type: array, items: { type: string }, description: Tag to remove (repeatable) }
       responses:
