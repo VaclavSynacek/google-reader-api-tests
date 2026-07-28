@@ -331,16 +331,19 @@ test('subscription import preserves an explicit OPML title', { timeout: 60000 },
   if (skipIfWritesDisabled(t)) return;
 
   await unsubscribeFeedIfPresent();
-  const importedTitle = 'Imported title ' + uniqueLabel('');
-  const importedLabelName = uniqueLabel(cfg.labelPrefix + 'Imported');
+  const importedTitle = 'Imported & title ☃ ' + uniqueLabel('');
+  const importedTitleXml = importedTitle.replace(/&/g, '&amp;').replace(/☃/g, '&#x2603;');
+  const importedLabelName = uniqueLabel(cfg.labelPrefix + 'Imported') + ' & group';
+  const importedLabelXml = importedLabelName.replace(/&/g, '&amp;');
   const importedLabel = label(importedLabelName);
   const opml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<opml version="2.0">',
     '  <head><title>contract-test</title></head>',
     '  <body>',
-    `    <outline text="${importedLabelName}" title="${importedLabelName}">`,
-    `      <outline type="rss" text="${importedTitle}" title="${importedTitle}" xmlUrl="${feedUrl}" htmlUrl="https://example.test/imported/"/>`,
+    `    <outline text='${importedLabelXml}' title='${importedLabelXml}'>`,
+    `      <outline type="rss" text="${importedTitleXml}" title="${importedTitleXml}" xmlUrl="${feedUrl}" htmlUrl="https://example.test/imported/">`,
+    '      </outline>',
     '    </outline>',
     '  </body>',
     '</opml>',
@@ -360,7 +363,7 @@ test('subscription import preserves an explicit OPML title', { timeout: 60000 },
   assert.ok((found.categories || []).some((category) => category.id === importedLabel), 'OPML parent outline must be imported as a category');
 
   const exported = await client.subscriptionExport();
-  assert.match(exported.text, new RegExp(`<(?:outline)[^>]+(?:text|title)="${escapeRegExp(importedLabelName)}"`), 'export must retain the category outline');
+  assert.match(exported.text, new RegExp(`<(?:outline)[^>]+(?:text|title)="${escapeRegExp(importedLabelXml)}"`), 'export must retain the category outline');
   assert.match(exported.text, new RegExp(`xmlUrl="${escapeRegExp(feedUrl)}"`), 'export must retain the categorized subscription');
 });
 
