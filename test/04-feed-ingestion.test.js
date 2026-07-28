@@ -375,7 +375,7 @@ test('ingestion: an updated item is reflected in the feed', { timeout: 240000 },
   assert.ok(reflected.categories.includes(stateLabel), 'labels must survive an update of the same feed item');
 });
 
-test('ingestion: edit-tag changes only the requested item', { timeout: 240000 }, async (t) => {
+test('ingestion: item labels are isolated, visible, renameable and disableable', { timeout: 240000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfIngestionDisabled(t)) return;
 
@@ -413,6 +413,21 @@ test('ingestion: edit-tag changes only the requested item', { timeout: 240000 },
   assert.ok(!unchanged.categories.includes(STATE.READ), 'editing one item must not mark another item read');
   assert.ok(!unchanged.categories.includes(STATE.STARRED), 'editing one item must not star another item');
   assert.ok(!unchanged.categories.includes(isolatedLabel), 'editing one item must not label another item');
+  assert.ok((await client.tagList()).json.tags.some((tag) => tag.id === isolatedLabel), 'item label must appear in tag/list');
+
+  const renamedLabel = label(uniqueLabel('IsolationRenamed'));
+  assert.equal((await client.renameTag({ s: isolatedLabel, dest: renamedLabel, T: token })).status, 200);
+  let renamed = await client.streamItemsContents([target.id, control.id], 'd', token);
+  const renamedTarget = renamed.json.items.find((item) => item.id === target.id);
+  const renamedControl = renamed.json.items.find((item) => item.id === control.id);
+  assert.ok(renamedTarget.categories.includes(renamedLabel), 'rename-tag must rename an item label');
+  assert.ok(!renamedTarget.categories.includes(isolatedLabel), 'rename-tag must remove the old item label');
+  assert.ok(!renamedControl.categories.includes(renamedLabel), 'rename-tag must not label unrelated items');
+
+  assert.equal((await client.disableTag({ s: [renamedLabel], T: token })).status, 200);
+  renamed = await client.streamItemsContents([target.id], 'd', token);
+  assert.ok(!renamed.json.items[0].categories.includes(renamedLabel), 'disable-tag must remove the label from items');
+  assert.ok(!(await client.tagList()).json.tags.some((tag) => tag.id === renamedLabel), 'disabled item label must disappear from tag/list');
 });
 
 test('ingestion: item endpoints accept decimal, tagged hexadecimal, and bare hexadecimal ids', { timeout: 240000 }, async (t) => {

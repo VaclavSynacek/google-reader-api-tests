@@ -51,6 +51,10 @@ async function findFeedWithItems() {
   return json.itemRefs;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // ---- subscription lifecycle (the canonical client round-trip) -------------
 
 test('subscribe -> appears in list -> unsubscribe -> gone', { timeout: 60000 }, async (t) => {
@@ -265,30 +269,46 @@ test('mark-all-as-read on reading-list returns OK', { timeout: 60000 }, async (t
   t.diagnostic('mark-all-as-read body = ' + JSON.stringify(text));
 });
 
-// ---- rename-tag / disable-tag lifecycle -----------------------------------
+// ---- subscription categories + rename-tag / disable-tag lifecycle --------
 
-test('rename-tag renames a label and disable-tag removes it', { timeout: 60000 }, async (t) => {
+test('subscription categories can be added, removed, renamed and disabled', { timeout: 60000 }, async (t) => {
   if (skipUnlessConfigured(t)) return;
   if (skipIfWritesDisabled(t)) return;
 
-  // We rename a label that we create on the fly by renaming itself twice.
-  // Some servers require the label to exist; we tolerate a 400/404 there.
+  await unsubscribeFeedIfPresent();
   const token = await client.postToken();
-  const a = label(uniqueLabel(cfg.labelPrefix));
-  const b = label(uniqueLabel(cfg.labelPrefix));
+  const source = label(uniqueLabel(cfg.labelPrefix));
+  const destination = label(uniqueLabel(cfg.labelPrefix));
+  assert.equal((await client.subscriptionEdit({
+    ac: 'subscribe', s: feed(feedUrl), a: source, T: token,
+  })).status, 200);
+  t.after(async () => {
+    try { await unsubscribeFeedIfPresent(); } catch { /* ignore */ }
+    try { await client.disableTag({ s: [source, destination], T: await client.postToken() }); } catch { /* ignore */ }
+  });
 
-  // Create via rename from a (may or may not create). Then rename a->b.
-  await client.renameTag({ s: a, dest: b, T: token }).catch(() => {});
-  const { status } = await client.renameTag({ s: b, dest: a, T: token });
-  // Either it succeeds (200) or reports not-found; both are acceptable
-  // contract behaviours across greader servers.
-  assert.ok([200, 400, 404].includes(status), `rename-tag unexpected status ${status}`);
+  let found = (await client.subscriptionList()).json.subscriptions.find((sub) => sub.url === feedUrl);
+  assert.ok(found, 'categorized subscription must appear in subscription/list');
+  assert.ok((found.categories || []).some((category) => category.id === source), 'subscribe a= must add the category');
+  assert.ok((await client.tagList()).json.tags.some((tag) => tag.id === source), 'added category must appear in tag/list');
 
-  // disable-tag cleanup
-  const { status: d1 } = await client.disableTag({ s: [a], T: token });
-  const { status: d2 } = await client.disableTag({ s: [b], T: token });
-  assert.ok([200, 400, 404].includes(d1));
-  assert.ok([200, 400, 404].includes(d2));
+  assert.equal((await client.renameTag({ s: source, dest: destination, T: token })).status, 200);
+  found = (await client.subscriptionList()).json.subscriptions.find((sub) => sub.url === feedUrl);
+  assert.ok((found.categories || []).some((category) => category.id === destination), 'renamed category must be attached to the subscription');
+  assert.ok(!(found.categories || []).some((category) => category.id === source), 'old category must be removed after rename');
+  const renamedTags = (await client.tagList()).json.tags.map((tag) => tag.id);
+  assert.ok(renamedTags.includes(destination), 'renamed category must appear in tag/list');
+  assert.ok(!renamedTags.includes(source), 'old category must disappear from tag/list');
+
+  assert.equal((await client.subscriptionEdit({ ac: 'edit', s: found.id, r: destination, T: token })).status, 200);
+  found = (await client.subscriptionList()).json.subscriptions.find((sub) => sub.url === feedUrl);
+  assert.ok(!(found.categories || []).some((category) => category.id === destination), 'subscription edit r= must remove the category');
+
+  assert.equal((await client.subscriptionEdit({ ac: 'edit', s: found.id, a: destination, T: token })).status, 200);
+  assert.equal((await client.disableTag({ s: [destination], T: token })).status, 200);
+  found = (await client.subscriptionList()).json.subscriptions.find((sub) => sub.url === feedUrl);
+  assert.ok(!(found.categories || []).some((category) => category.id === destination), 'disabled category must be detached from subscriptions');
+  assert.ok(!(await client.tagList()).json.tags.some((tag) => tag.id === destination), 'disabled category must disappear from tag/list');
 });
 
 // ---- OPML export/import ----------------------------------------------------
@@ -312,12 +332,16 @@ test('subscription import preserves an explicit OPML title', { timeout: 60000 },
 
   await unsubscribeFeedIfPresent();
   const importedTitle = 'Imported title ' + uniqueLabel('');
+  const importedLabelName = uniqueLabel(cfg.labelPrefix + 'Imported');
+  const importedLabel = label(importedLabelName);
   const opml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<opml version="2.0">',
     '  <head><title>contract-test</title></head>',
     '  <body>',
-    `    <outline type="rss" text="${importedTitle}" title="${importedTitle}" xmlUrl="${feedUrl}" htmlUrl="https://example.test/imported/"/>`,
+    `    <outline text="${importedLabelName}" title="${importedLabelName}">`,
+    `      <outline type="rss" text="${importedTitle}" title="${importedTitle}" xmlUrl="${feedUrl}" htmlUrl="https://example.test/imported/"/>`,
+    '    </outline>',
     '  </body>',
     '</opml>',
   ].join('\n');
@@ -326,12 +350,18 @@ test('subscription import preserves an explicit OPML title', { timeout: 60000 },
   assert.ok(status >= 200 && status < 300, `import must succeed (2xx), got ${status}`);
   t.after(async () => {
     try { await unsubscribeFeedIfPresent(); } catch { /* ignore */ }
+    try { await client.disableTag({ s: [importedLabel], T: await client.postToken() }); } catch { /* ignore */ }
   });
 
   const { json } = await client.subscriptionList();
   const found = json.subscriptions.find((s) => s.url === feedUrl);
   assert.ok(found, 'OPML feed outline must create a subscription');
   assert.equal(found.title, importedTitle, 'OPML title/text must be preserved as the subscription title');
+  assert.ok((found.categories || []).some((category) => category.id === importedLabel), 'OPML parent outline must be imported as a category');
+
+  const exported = await client.subscriptionExport();
+  assert.match(exported.text, new RegExp(`<(?:outline)[^>]+(?:text|title)="${escapeRegExp(importedLabelName)}"`), 'export must retain the category outline');
+  assert.match(exported.text, new RegExp(`xmlUrl="${escapeRegExp(feedUrl)}"`), 'export must retain the categorized subscription');
 });
 
 test('subscription/import accepts OPML and returns 2xx', { timeout: 60000 }, async (t) => {
