@@ -522,7 +522,10 @@ components:
       name: c
       in: query
       required: false
-      description: Continuation token (numeric). Returned as `continuation`.
+      description: |
+        Numeric ID of the last item returned by the previous page. The item
+        identified by the cursor is not repeated. Returned as `continuation`
+        when a response fills the requested `n`; omitted on a partial final page.
       schema: { type: string }
 
     ck:

@@ -294,6 +294,48 @@ test('ingestion: stream queries honor count, ordering, hydration, ot and nt', { 
     assert.ok(ts(oldestFirst.items[i]) >= ts(oldestFirst.items[i - 1]), 'r=o timestamps must be non-decreasing');
   }
 
+  const pagedItems = [];
+  let contentsContinuation;
+  for (let page = 0; page < 4 && pagedItems.length < 8; page += 1) {
+    const { json: result } = await client.streamContents(feedStreamId, {
+      n: 3,
+      r: 'o',
+      ...(contentsContinuation ? { c: contentsContinuation } : {}),
+    });
+    assert.ok(result && Array.isArray(result.items), 'paginated stream/contents must return items');
+    assert.ok(result.items.length <= 3, 'a continuation page must honor n');
+    assert.ok(!result.items.some((item) => pagedItems.some((old) => old.id === item.id)), 'continuation pages must not repeat items');
+    pagedItems.push(...result.items);
+    contentsContinuation = result.continuation;
+    if (pagedItems.length < 8) assert.ok(contentsContinuation, 'a full page with more items must return continuation');
+  }
+  assert.deepEqual(
+    pagedItems.map((item) => item.id),
+    oldestFirst.items.map((item) => item.id),
+    'stream/contents continuation pages must reproduce the complete ordered stream',
+  );
+  assert.equal(contentsContinuation, undefined, 'the final partial stream/contents page must not return continuation');
+
+  const pagedRefIds = [];
+  let idsContinuation;
+  for (let page = 0; page < 4 && pagedRefIds.length < 8; page += 1) {
+    const result = await client.streamItemIds(feedStreamId, {
+      n: 3,
+      r: 'd',
+      ...(idsContinuation ? { c: idsContinuation } : {}),
+    });
+    assert.equal(result.status, 200);
+    const pageIds = result.json.itemRefs.map((ref) => ref.id);
+    assert.ok(pageIds.length <= 3, 'an item ID continuation page must honor n');
+    assert.ok(!pageIds.some((id) => pagedRefIds.includes(id)), 'item ID continuation pages must not repeat IDs');
+    pagedRefIds.push(...pageIds);
+    idsContinuation = result.json.continuation;
+    if (pagedRefIds.length < 8) assert.ok(idsContinuation, 'a full item ID page with more items must return continuation');
+  }
+  assert.equal(pagedRefIds.length, 8, 'stream/items/ids continuation pages must return the complete stream');
+  assert.equal(new Set(pagedRefIds).size, 8, 'stream/items/ids continuation pages must return each item once');
+  assert.equal(idsContinuation, undefined, 'the final partial item ID page must not return continuation');
+
   // Both filters are strict. These queries deliberately place all matches
   // beyond the first five rows in query order, catching implementations that
   // fetch a fixed oversample window and filter afterward.

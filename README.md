@@ -49,7 +49,7 @@ There are four independent groups, in separate files:
 | `test/01-auth.test.js` | Authentication | `ClientLogin` flow, POST token, auth rejection. Includes unit tests. |
 | `test/02-read-endpoints.test.js` | Read operations | Non-mutating endpoint and JSON-shape checks that do not require fixture data. |
 | `test/03-write-endpoints.test.js` | Update operations | Mutating endpoints and round-trip flows: subscriptions, quickadd HTML feed discovery and selection, custom titles, edit-tag read/star cycles, rename/disable-tag, OPML import/export and title preservation, mark-all-as-read. |
-| `test/04-feed-ingestion.test.js` | Feed ingestion | **Server behavior, not protocol contract.** Verifies fetching, article updates, feed metadata, title overrides, and unsubscribe cleanup. |
+| `test/04-feed-ingestion.test.js` | Feed ingestion | **Server behavior, not protocol contract.** Verifies fetching, article updates, feed metadata, title overrides, stream continuation pagination, and unsubscribe cleanup. |
 
 The first three exercise the wire protocol and directly client-visible
 compatibility, including quickadd discovery behavior. Groups 1 and 2 are
