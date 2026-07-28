@@ -563,6 +563,28 @@ test('ingestion: unread-count follows item state transitions', { timeout: 240000
   assert.ok(reduced, 'marking one item read must reduce its feed unread count');
   assert.equal(String(reduced.newestItemTimestampUsec), remainingNewest);
 
+  const canonicalId = (value) => {
+    const text = typeof value === 'string' ? value : value.id;
+    const raw = text.includes('/') ? BigInt('0x' + text.slice(text.lastIndexOf('/') + 1)) : BigInt(text);
+    return BigInt.asUintN(64, raw).toString(10);
+  };
+  const fixtureIds = new Set(items.map(canonicalId));
+  const allIds = (await client.streamItemIds(feedStreamId, { n: 10 })).json.itemRefs
+    .map((ref) => canonicalId(ref.id)).filter((id) => fixtureIds.has(id));
+  const unreadIds = (await client.streamItemIds(feedStreamId, { n: 10, xt: STATE.READ })).json.itemRefs
+    .map((ref) => canonicalId(ref.id)).filter((id) => fixtureIds.has(id));
+  const readByItIds = (await client.streamItemIds(feedStreamId, { n: 10, it: STATE.READ })).json.itemRefs
+    .map((ref) => canonicalId(ref.id)).filter((id) => fixtureIds.has(id));
+  const readStreamIds = (await client.streamItemIds(STATE.READ, {
+    n: 1000,
+    ot: Math.floor(base / 1000) - 1,
+  })).json.itemRefs.map((ref) => canonicalId(ref.id)).filter((id) => fixtureIds.has(id));
+  assert.deepEqual(new Set(allIds), fixtureIds, 'feed stream must expose every fixture item');
+  assert.deepEqual(new Set(unreadIds), new Set(items.filter((item) => item.id !== newest.id).map(canonicalId)));
+  assert.deepEqual(readByItIds, [canonicalId(newest)], 'it=read must return only read items');
+  assert.deepEqual(readStreamIds, [canonicalId(newest)], 'the canonical read stream must return only read items');
+  assert.deepEqual(new Set([...unreadIds, ...readByItIds]), fixtureIds, 'read and unread IDs must partition the feed');
+
   assert.equal((await client.editTag({ i: [newest.id], r: [STATE.READ], T: token })).status, 200);
   const restored = await poll('unread count is restored', async () => {
     const entry = (await client.unreadCount()).json.unreadcounts.find((value) => value.id === feedStreamId);
